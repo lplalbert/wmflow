@@ -112,6 +112,35 @@
   .pvrow figure { margin:0; flex:1; }
   .pvrow img { width:100%; border-radius:6px; }
   .pvrow figcaption { font-size:10.5px; color:var(--dim); text-align:center; }
+
+  /* 组件库 / 组装台 */
+  .pal-group { margin-bottom:12px; }
+  .pal-group h4 { margin:0 0 6px; font-size:12px; color:var(--acc);
+      display:flex; align-items:center; gap:8px; }
+  .pal-group h4 .mini { font-size:10px; color:var(--dim); font-weight:400;
+      margin-left:auto; cursor:pointer; border:1px solid var(--line);
+      border-radius:5px; padding:1px 7px; }
+  .pal-group h4 .mini:hover { border-color:var(--acc); }
+  .seg-card { background:var(--panel2); border:1px solid var(--line);
+      border-radius:8px; padding:7px 10px; margin-bottom:6px; }
+  .seg-card .t { font-size:12px; font-weight:600; display:flex; gap:6px;
+      align-items:center; }
+  .seg-card .t .f { font-size:9.5px; padding:0 6px; border-radius:99px;
+      background:#263042; color:var(--dim); font-weight:500; }
+  .seg-card .d { font-size:10.5px; color:var(--dim); margin-top:3px;
+      font-family:ui-monospace,monospace; }
+  .seg-card .io { font-size:9.5px; color:#6b7382; margin-top:2px;
+      font-family:ui-monospace,monospace; }
+  .seg-card button { float:right; margin-top:-2px; padding:1px 9px; font-size:11px; }
+  .bench-strip { display:flex; gap:6px; flex-wrap:wrap; padding:8px 10px;
+      background:var(--panel); border-bottom:1px solid var(--line); }
+  .chip { display:flex; align-items:center; gap:6px; background:var(--panel2);
+      border:1px solid var(--line); border-radius:8px; padding:4px 8px;
+      font-size:11px; }
+  .chip b { font-weight:600; }
+  .chip .op { cursor:pointer; color:var(--dim); padding:0 3px; }
+  .chip .op:hover { color:var(--acc); }
+  .chip .x:hover { color:var(--err); }
 </style>
 </head>
 <body>
@@ -163,31 +192,19 @@
 
 <!-- ============ 积木链控制 ============ -->
 <div class="ctrl" id="ctrl-blocks" style="display:none">
-  <label>网络 <select id="part" onchange="loadBlocks()">
+  <label>模式 <select id="benchMode">
     <option value="encoder">encoder (image+msg → 水印图)</option>
-    <option value="decoder">decoder (image → bit logits)</option>
+    <option value="decoder">decoder (image → logits)</option>
   </select></label>
-  <label>框架 <select id="fw2" onchange="loadBlocks()">
-    <option value="hidden">hidden</option><option value="stegastamp">stegastamp</option>
-    <option value="mbrs">mbrs</option><option value="videoseal">videoseal</option>
-  </select></label>
-  <button class="primary" onclick="runTrace()">▶ 逐积木追踪</button>
-  <button onclick="loadBlocks()">重置</button>
+  <label>msg_len <input id="benchMsgLen" type="number" value="30" style="width:60px"></label>
+  <label>size <input id="benchSize" type="number" value="128" step="32" style="width:64px"></label>
+  <button class="primary" onclick="buildBench()">🔧 构建校验</button>
+  <button onclick="runTrace()">▶ 逐积木追踪</button>
+  <button onclick="benchClear()">清空组装台</button>
+  <span style="width:12px"></span>
+  <button onclick="benchPipe('enc')">▶ 作为 enc 跑流水线</button>
+  <button onclick="benchPipe('dec')">▶ 作为 dec 跑流水线</button>
   <span id="blockStatus" class="status"></span>
-  <div style="width:100%;height:0"></div>
-  <label style="border-left:2px solid var(--line);padding-left:10px">混搭组装
-    <span class="sub">enc 来源</span>
-    <select id="mixEnc">
-      <option value="hidden">hidden</option><option value="stegastamp">stegastamp</option>
-      <option value="mbrs">mbrs</option><option value="videoseal">videoseal</option>
-    </select>
-    <span class="sub">+ dec 来源</span>
-    <select id="mixDec">
-      <option value="videoseal">videoseal</option><option value="hidden">hidden</option>
-      <option value="stegastamp">stegastamp</option><option value="mbrs">mbrs</option>
-    </select>
-    <button class="primary" onclick="runMix()">🧪 组装并跑流水线</button>
-  </label>
   <div class="legend" style="margin-left:auto">
     <span><b style="background:#e0a33e"></b>message 消息处理</span>
     <span><b style="background:#3fb96f"></b>fusion 融合/输出</span>
@@ -196,6 +213,7 @@
     <span><b style="background:#b573ff"></b>attention</span>
   </div>
 </div>
+<div class="bench-strip" id="benchStrip" style="display:none"></div>
 
 <div class="main">
   <div class="canvas-wrap" id="wrap">
@@ -274,10 +292,16 @@
   </div>
   <div class="side">
     <div class="tabs">
-      <button id="tab-llm" class="on" onclick="setSide('llm')">LLM Prompt</button>
+      <button id="tab-lib" class="on" onclick="setSide('lib')">组件库</button>
+      <button id="tab-llm" onclick="setSide('llm')">LLM Prompt</button>
       <button id="tab-edit" onclick="setSide('edit')">节点编辑</button>
     </div>
-    <div class="pane" id="pane-llm">
+    <div class="pane" id="pane-lib">
+      <div class="status" style="margin-bottom:8px">
+        按框架收集的积木段 → 点 <b>＋</b> 拣入组装台; 整段 = 一键载入整张网络</div>
+      <div id="palette"></div>
+    </div>
+    <div class="pane" id="pane-llm" style="display:none">
       <div class="row">
         <select id="pmode">
           <option value="describe">框架描述</option>
@@ -320,6 +344,7 @@ const CAT_COLOR = { basic:'#4f8cff', message:'#e0a33e', fusion:'#3fb96f',
 const $ = id => document.getElementById(id);
 let RECIPES=null, MODULES=null;
 let view='pipe', graph={nodes:[],links:[]}, blocksSpec=null, editSel=null, mixSpec=null;
+let COMPONENTS=null, benchSegs=[];
 
 async function api(path, body) {
   const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'},
@@ -497,15 +522,119 @@ async function refreshRuns() {
     r.runs.map(x => `<option value="${x.ckpt}">${x.run}</option>`).join('');
 }
 
-/* ================= 积木链 (分类着色, 端点差异化) ================= */
-async function loadBlocks() {
-  if (!RECIPES) {
-    const [rs, ms] = await Promise.all([api('/api/recipes'), api('/api/modules')]);
-    RECIPES = rs.recipes; MODULES = ms.modules;
+/* ================= 组件库 + 组装台 ================= */
+async function loadComponents() {
+  if (COMPONENTS) return COMPONENTS;
+  COMPONENTS = await api('/api/components');
+  return COMPONENTS;
+}
+
+function segCardHTML(fw, part, seg) {
+  const io = (seg.in.length ? 'in ' + seg.in.map(s=>JSON.stringify(s).replace(/[\",]/g,'')).join(' ') : '') +
+    ' → ' + (seg.out.length ? seg.out.map(s=>JSON.stringify(s).replace(/[\",]/g,'')).join(' ') : '?');
+  return `<div class="seg-card">
+    <button onclick="addSeg('${fw}','${part}','${seg.key}')">＋</button>
+    <div class="t">${seg.label}<span class="f">${fw}.${part}</span></div>
+    <div class="d">${seg.types}</div>
+    <div class="io">${io}</div>
+    <div class="d" style="opacity:.75">${seg.layers}</div>
+  </div>`;
+}
+
+async function renderPalette() {
+  await loadComponents();
+  let h = '';
+  for (const g of COMPONENTS.groups) {
+    h += `<div class="pal-group"><h4>${g.framework}
+      <span class="mini" onclick="loadWhole('${g.framework}','encoder')">整段载入 enc</span>
+      <span class="mini" onclick="loadWhole('${g.framework}','decoder')">整段载入 dec</span></h4>`;
+    for (const part of ('encoder','decoder')) {
+      h += `<div class="d" style="font-size:10px;color:var(--dim);margin:2px 0 4px">— ${part} —</div>`;
+      for (const seg of g[part]) h += segCardHTML(g.framework, part, seg);
+    }
+    h += '</div>';
   }
-  const part = $('part').value, fw = $('fw2').value;
-  blocksSpec = JSON.parse(JSON.stringify(RECIPES[fw][part]));
+  h += `<div class="pal-group"><h4>自由单积木</h4>`;
+  for (const seg of COMPONENTS.modules) h += segCardHTML('generic','any',seg);
+  h += '</div>';
+  $('palette').innerHTML = h;
+}
+
+function findSeg(fw, part, key) {
+  if (fw === 'generic') return COMPONENTS.modules.find(s => s.key === key);
+  const g = COMPONENTS.groups.find(x => x.framework === fw);
+  return (g[part] || []).find(s => s.key === key);
+}
+
+function addSeg(fw, part, key) {
+  const seg = findSeg(fw, part, key);
+  benchSegs.push(JSON.parse(JSON.stringify(seg)));
+  renderBenchStrip();
+}
+function loadWhole(fw, part) {
+  const g = COMPONENTS.groups.find(x => x.framework === fw);
+  benchSegs = JSON.parse(JSON.stringify(g[part]));
+  renderBenchStrip();
+  buildBench();
+}
+function moveSeg(i, d) {
+  const j = i + d;
+  if (j < 0 || j >= benchSegs.length) return;
+  [benchSegs[i], benchSegs[j]] = [benchSegs[j], benchSegs[i]];
+  renderBenchStrip();
+}
+function delSeg(i) { benchSegs.splice(i, 1); renderBenchStrip(); }
+function benchClear() { benchSegs = []; blocksSpec = null; renderBenchStrip(); drawBlocks({}); }
+
+function renderBenchStrip() {
+  const el = $('benchStrip');
+  if (!benchSegs.length) {
+    el.innerHTML = '<span class="status">组装台空: 从右侧组件库点「＋」拣段 (整段载入可直接建整网)</span>';
+    return;
+  }
+  el.innerHTML = benchSegs.map((s,i) => `<div class="chip">
+    <span class="op" onclick="moveSeg(${i},-1)">▲</span>
+    <span class="op" onclick="moveSeg(${i},1)">▼</span>
+    <b>${s.label}</b>
+    <span style="color:var(--dim)">${s.types}</span>
+    <span class="op x" onclick="delSeg(${i})">✕</span>
+  </div>`).join('<span style="color:#3a4252;align-self:center">→</span>');
+}
+
+async function buildBench() {
+  const r = await api('/api/assemble', {
+    mode: $('benchMode').value,
+    msg_len: +$('benchMsgLen').value,
+    size: +$('benchSize').value,
+    segments: benchSegs});
+  if (!r.ok) {
+    $('blockStatus').textContent = '构建失败: ' + r.error;
+    $('blockStatus').className = 'status err';
+    return null;
+  }
+  blocksSpec = r.spec;
   drawBlocks({});
+  $('blockStatus').innerHTML = `✓ 构建通过 · 输出 ${JSON.stringify(r.report.out_shape)}` +
+    (r.report.auto_adapters.length
+      ? ` · 自动适配 ${r.report.auto_adapters.length} 处` : '');
+  $('blockStatus').className = 'status ok';
+  return r;
+}
+
+function benchPipe(side) {
+  if (!blocksSpec) {
+    $('blockStatus').textContent = '先构建 (🔧 构建校验)';
+    $('blockStatus').className = 'status err';
+    return;
+  }
+  const part = $('benchMode').value;
+  mixSpec = {
+    enc: side === 'enc' ? blocksSpec : (RECIPES['hidden'] ? RECIPES['hidden'].encoder : null),
+    dec: side === 'dec' ? blocksSpec : (RECIPES['hidden'] ? RECIPES['hidden'].decoder : null),
+    label: `组装台(${part}) 作 ${side}`};
+  if (!mixSpec.enc || !mixSpec.dec) return;
+  setView('pipe');
+  setTimeout(runDemo, 60);
 }
 
 function drawBlocks(thumbs) {
@@ -563,9 +692,11 @@ function drawBlocks(thumbs) {
 }
 
 async function runTrace() {
+  if (!blocksSpec) {
+    const r = await buildBench();
+    if (!r) return;
+  }
   $('blockStatus').textContent = '追踪中...';
-  // 始终按当前下拉重建 spec (此前复用旧 spec 导致切 decoder 仍画 encoder)
-  await loadBlocks();
   const d = await api('/api/trace', {spec: blocksSpec});
   if (!d.ok) {
     $('blockStatus').textContent = d.error; $('blockStatus').className='status err';
@@ -574,18 +705,6 @@ async function runTrace() {
   drawBlocks(d.thumbs);
   $('blockStatus').innerHTML += ` · ✓ 逐积木输出已显示 (${d.output})`;
   $('blockStatus').className = 'status ok';
-}
-
-async function runMix() {
-  if (!RECIPES) await loadBlocks();
-  const e = $('mixEnc').value, d = $('mixDec').value;
-  if (e === d) {
-    $('blockStatus').textContent = 'enc/dec 来源相同 (可换不同框架看混搭)';
-  }
-  mixSpec = {enc: RECIPES[e].encoder, dec: RECIPES[d].decoder,
-             label: `${e}.enc + ${d}.dec`};
-  setView('pipe');
-  setTimeout(runDemo, 60);
 }
 
 /* ================= 节点编辑 ================= */
@@ -714,7 +833,7 @@ function useCkpt(p) {
 
 /* ================= LLM ================= */
 function setSide(x) {
-  ['llm','edit'].forEach(t => {
+  ['lib','llm','edit'].forEach(t => {
     $('tab-'+t).className = t===x ? 'on' : '';
     $('pane-'+t).style.display = t===x ? 'block' : 'none';
   });
@@ -727,9 +846,14 @@ function setView(v) {
   });
   $('canvas').style.display = v==='train' ? 'none' : '';
   $('links').style.display = v==='train' ? 'none' : '';
+  $('benchStrip').style.display = v==='blocks' ? 'flex' : 'none';
   $('trainPanel').style.display = v==='train' ? 'grid' : 'none';
   if (v==='pipe') { if (!graph.nodes.length) runDemo(); refreshRuns(); }
-  else if (v==='blocks') { if (!blocksSpec) loadBlocks(); else drawBlocks({}); }
+  else if (v==='blocks') {
+    setSide('lib');
+    renderPalette(); renderBenchStrip();
+    if (blocksSpec) drawBlocks({});
+  }
   else { initTrainUI(); if (trainTimer) clearInterval(trainTimer);
          trainTimer = setInterval(trainPoll, 2000); trainPoll(); }
   if (v!=='train' && trainTimer) { clearInterval(trainTimer); trainTimer=null; }
@@ -737,7 +861,7 @@ function setView(v) {
 
 async function genPrompt() {
   const mode = $('pmode').value;
-  const fw = view==='blocks' ? $('fw2').value : $('fw').value;
+  const fw = $('fw').value;
   const spec = view==='blocks' ? blocksSpec
     : (RECIPES && RECIPES[fw] ? RECIPES[fw].encoder : null);
   const body = {spec: spec || blocksSpec, mode,
@@ -763,6 +887,7 @@ async function applyReply() {
 (async function init() {
   const [rs, ms] = await Promise.all([api('/api/recipes'), api('/api/modules')]);
   RECIPES = rs.recipes; MODULES = ms.modules;
+  await loadComponents();
   runDemo();
 })();
 </script>

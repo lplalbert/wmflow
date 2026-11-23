@@ -255,7 +255,8 @@ def _residual_add(in_shapes, **_):
             x, cover = xs
             return (x + cover).clamp(0, 1)
 
-    return ResAdd(), [in_shapes[0]]
+    # 形状取 cover (x+cover 广播: x 通道少时向 cover 对齐)
+    return ResAdd(), [in_shapes[1]]
 
 
 @register_module(

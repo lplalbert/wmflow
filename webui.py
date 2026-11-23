@@ -424,12 +424,42 @@ def op_runs(_d):
     return {"runs": out}
 
 
+def op_components(_d):
+    """组件库: 各框架的积木段货架 + 自由单积木。"""
+    from wmflow.components import segment_spec, single_module_segments
+    groups = []
+    for fw, fn in RECIPES.items():
+        enc, dec, meta = fn()
+        groups.append({
+            "framework": fw, "paper": meta.get("paper", ""),
+            "encoder": segment_spec(enc.spec),
+            "decoder": segment_spec(dec.spec),
+        })
+    return {"groups": groups, "modules": single_module_segments()}
+
+
+def op_assemble(d):
+    """组件段拼装 → NetSpec + 形状报告 + prompt。"""
+    from wmflow.components import assemble
+    try:
+        spec_dict = assemble(d.get("segments", []),
+                             d.get("mode", "encoder"),
+                             int(d.get("msg_len", 64)),
+                             int(d.get("size", 128)))
+        ns = NetSpec(spec_dict)
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "spec": ns.spec, "report": build_report(ns),
+            "prompt": ns.render_prompt()}
+
+
 OPS = {
     "modules": op_modules, "recipes": op_recipes, "build": op_build,
     "swap": op_swap, "prompt": op_prompt, "apply_reply": op_apply_reply,
     "forward": op_forward, "run_demo": op_run_demo, "trace": op_trace,
     "fs": op_fs, "train_start": op_train_start, "train_status": op_train_status,
     "train_stop": op_train_stop, "runs": op_runs,
+    "components": op_components, "assemble": op_assemble,
 }
 
 
