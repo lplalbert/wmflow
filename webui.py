@@ -233,20 +233,35 @@ def op_run_demo(d):
     import numpy as np
     framework = d.get("framework", "hidden")
     size = int(d.get("size", 128))
+    if d.get("enc_spec"):
+        size = int(d["enc_spec"]["input"]["image"][1])  # 以组装网络的输入尺寸为准
     strength = float(d.get("strength", 1.0))
     seed = int(d.get("seed", 0))
     layer = d.get("layer", "none")
     preset = d.get("preset", "none")
 
     cover = _demo_cover(size, d.get("cover_upload"))
-    # 模型: lsb_toy 真嵌入; 三配方用随机权重演示结构 (标注 untrained)
-    if framework == "lsb_toy":
+    # 模型: lsb_toy 真嵌入; 配方/自定义组装用随机权重演示结构 (标注 untrained)
+    if framework == "lsb_toy" and not d.get("enc_spec"):
         from wmflow.nodes_models import make_lsb_toy
         msg_len = int(d.get("msg_len", 64))
         model = make_lsb_toy(msg_len)
         trained = True
     else:
-        enc, dec, meta = RECIPES[framework]()
+        # 自定义组装: enc_spec/dec_spec 可来自不同配方 (跨框架混搭)
+        if d.get("enc_spec"):
+            enc = NetSpec(d["enc_spec"])
+            dec = NetSpec(d["dec_spec"])
+            meta = {"framework": f"mix:{enc.name}+{dec.name}"}
+            # 自动适配: dec 的 bit_head 消息长对齐 enc (如 hidden 30bit ↔ videoseal 256bit)
+            want = enc.inputs["message"][0]
+            heads = [{"id": m["id"], "params": {"msg_len": want}}
+                     for m in dec.modules if m["type"] == "bit_head"]
+            if heads and dec.modules[-1].get("params", {}).get("msg_len") != want:
+                dec = dec.apply_patch(heads)
+                meta["msg_len_aligned"] = want
+        else:
+            enc, dec, meta = RECIPES[framework]()
         eb, db = enc.build(), dec.build()
         trained = False
         msg_len = enc.inputs["message"][0]
@@ -301,7 +316,8 @@ def op_run_demo(d):
         attacked, p2 = TranscodeChain().execute(attacked, preset)
         attack_params.update(p2)
     dec_bits = model.decode_fn(attacked)
-    errs = int(np.sum(dec_bits != bits))
+    L = min(len(dec_bits), len(bits))   # 防御: 组装头长不齐时按短边比较
+    errs = int(np.sum(dec_bits[:L] != bits[:L]))
     mse = float(np.mean((embedded - cover) ** 2))
     mse_a = float(np.mean((attacked - cover) ** 2))
 
@@ -317,8 +333,8 @@ def op_run_demo(d):
                          "psnr": round(10 * np.log10(1.0 / max(mse_a, 1e-10)), 2)},
             "decoded": {"kind": "bits", "bits": dec_bits.tolist(),
                         "ref": bits.tolist()},
-            "metrics": {"ber": round(errs / msg_len, 4),
-                        "bit_errors": errs, "n_bits": int(msg_len),
+            "metrics": {"ber": round(errs / max(L, 1), 4),
+                        "bit_errors": errs, "n_bits": int(L),
                         "psnr_embed": round(10 * np.log10(1.0 / max(mse, 1e-10)), 2),
                         "psnr_attacked": round(10 * np.log10(1.0 / max(mse_a, 1e-10)), 2)},
         },

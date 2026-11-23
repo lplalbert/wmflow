@@ -27,7 +27,7 @@ def test_module_catalog():
 
 def test_recipes_build_and_forward():
     import torch
-    for fw in ("hidden", "stegastamp", "mbrs"):
+    for fw in ("hidden", "stegastamp", "mbrs", "videoseal"):
         enc, dec, meta = RECIPES[fw]()
         eb, db = enc.build(), dec.build()
         em, dm = eb.as_module(), db.as_module()
@@ -42,6 +42,30 @@ def test_recipes_build_and_forward():
         assert 0.0 <= float(y.min()) and float(y.max()) <= 1.0
         print(f"[ok] {fw}: enc->dec forward 128x128, msg_len={msg_len}, "
               f"modules {len(eb.modules)}/{len(db.modules)}")
+
+
+def test_cross_framework_mix():
+    """跨框架混搭: hidden.enc + videoseal.dec (msg_len 对齐后可跑)。"""
+    import torch
+    from wmflow.netspec import NetSpec
+    enc, _, _ = RECIPES["hidden"]()
+    _, dec, _ = RECIPES["videoseal"]()
+    # videoseal msg_len=256, hidden=30 → 取 hidden 消息长重新生成 dec 侧? 用原样:
+    # dec 期待 256 输入则 enc 30 位不合 → 应须 msg_len 一致才能混搭。
+    try:
+        mix_dec = NetSpec({**dec.spec, "input": {"image": [3, 128, 128]}})
+    except Exception as e:
+        raise AssertionError(f"混搭 dec 重建失败: {e}")
+    em = enc.build().as_module()
+    dm = mix_dec.build().as_module()
+    x = torch.rand(1, 3, 128, 128)
+    m = (torch.rand(1, 30) > 0.5).float()
+    with torch.no_grad():
+        y = em({"image": x, "message": m})
+        logit = dm({"image": y})
+    assert logit.shape[1] == 256, f"videoseal dec 应出 256 位, got {logit.shape}"
+    print(f"[ok] 跨框架混搭 hidden.enc({m.shape[1]}bit) + videoseal.dec"
+          f" → logits {tuple(logit.shape)} (bit 头长度不齐时上游须对齐 msg_len)")
 
 
 def test_auto_adapt():

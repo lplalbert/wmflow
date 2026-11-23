@@ -128,10 +128,33 @@ def mbrs(msg_len: int = 30, size: int = 128) -> Tuple[NetSpec, NetSpec, dict]:
     return enc, dec, MBRS
 
 
+# ---------------------------------------------------------------------------
+# VideoSeal (图像模型侧)
+# ---------------------------------------------------------------------------
+VIDEOSEAL = {
+    "framework": "videoseal",
+    "paper": "VideoSeal: Open and efficient video and image watermarking "
+             "(Facebook Research, 2024; 含 PixelSeal/ChunkySeal 后续)",
+    "msg_len": 256, "size": 128,
+    "fidelity": "模块级结构对照 (图像模型侧: 低频嵌入思想 → msg_map 平滑铺图 + "
+                "较深解码主干对应鲁棒检测+提取双任务); 时域一致性是视频侧逻辑不在此",
+    "train_note": "以可微模糊为主的攻击训练 (blurring), 对物理拍摄/再编码鲁棒; "
+                  "检测头=bit logits 阈值 (detect), 提取=同 logits>0.5",
+    "attacks_train": ["blur", "noise", "jpeg_sim", "resize"],
+}
+
+
+def videoseal(msg_len: int = 256, size: int = 128) -> Tuple[NetSpec, NetSpec, dict]:
+    enc = NetSpec(_enc("videoseal_encoder", msg_len, size, n_res=3, mid_ch=64))
+    dec = NetSpec(_dec("videoseal_decoder", msg_len, size, n_res=5, mid_ch=64))
+    return enc, dec, VIDEOSEAL
+
+
 RECIPES = {
     "hidden": hidden,
     "stegastamp": stegastamp,
     "mbrs": mbrs,
+    "videoseal": videoseal,
 }
 
 
