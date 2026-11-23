@@ -170,10 +170,179 @@ def op_forward(d):
     }
 
 
+# ---------------------------------------------------------------- demo 图像工具
+def _png_b64(arr):
+    """float [0,1] HWC(1|3 通道) 或灰度 HW → PNG base64。"""
+    import base64
+    import cv2
+    import numpy as np
+    a = np.asarray(arr)
+    if a.ndim == 2:
+        a = np.stack([a] * 3, axis=-1)
+    if a.shape[-1] == 1:
+        a = np.repeat(a, 3, axis=-1)
+    u8 = (np.clip(a, 0, 1) * 255).astype(np.uint8)
+    ok, buf = cv2.imencode(".png", u8[:, :, ::-1])
+    return base64.b64encode(buf.tobytes()).decode("ascii")
+
+
+def _thumb(t):
+    """torch 张量 (B,C,H,W) 或 (B,L) → 缩略图 base64 / 比特列表。"""
+    import numpy as np
+    a = t.detach().cpu().numpy()[0] if hasattr(t, "detach") else np.asarray(t)[0]
+    if a.ndim == 3:  # (C,H,W)
+        if a.shape[0] == 3:
+            return {"kind": "image", "png": _png_b64(a.transpose(1, 2, 0))}
+        m = a.mean(axis=0)                       # 特征图 → 通道均值热图
+        lo, hi = float(m.min()), float(m.max())
+        m = (m - lo) / (hi - lo + 1e-9)
+        return {"kind": "feat", "png": _png_b64(m),
+                "ch": a.shape[0], "range": [round(lo, 3), round(hi, 3)]}
+    return {"kind": "vec", "values": [round(float(v), 3) for v in a[:256]]}
+
+
+def _demo_cover(size, upload_b64=None):
+    """演示载体: 用户上传图 (base64 dataURL) 或合成纹理图。"""
+    import base64
+    import cv2
+    import numpy as np
+    if upload_b64:
+        raw = base64.b64decode(upload_b64.split(",", 1)[-1])
+        img = cv2.imdecode(np.frombuffer(raw, np.uint8), cv2.IMREAD_COLOR)
+        if img is not None:
+            img = cv2.resize(img, (size, size))
+            return img[:, :, ::-1].astype(np.float32) / 255.0
+    yy, xx = np.mgrid[0:size, 0:size].astype(np.float32) / size
+    img = np.stack([
+        0.5 + 0.4 * np.sin(6 * xx + 3 * yy),
+        0.5 + 0.4 * np.sin(9 * yy + np.cos(4 * xx)),
+        0.5 + 0.4 * np.cos(7 * (xx + yy)),
+    ], axis=-1)
+    rng = np.random.default_rng(11)
+    img += rng.normal(0, 0.03, img.shape)
+    # 画点几何纹理, 利于看水印/攻击差异
+    img = np.ascontiguousarray(img)
+    cv2.circle(img, (size // 3, size // 2), size // 5, (0.9, 0.2, 0.2), -1)
+    cv2.rectangle(img, (size // 2, size // 4), (size * 5 // 6, size * 3 // 4),
+                  (0.2, 0.3, 0.9), -1)
+    return np.clip(img, 0, 1).astype(np.float32)
+
+
+def op_run_demo(d):
+    """全流程真跑: 载体→嵌入→攻击→提取, 逐节点输出可视化 + 指标。"""
+    import numpy as np
+    framework = d.get("framework", "hidden")
+    size = int(d.get("size", 128))
+    strength = float(d.get("strength", 1.0))
+    seed = int(d.get("seed", 0))
+    layer = d.get("layer", "none")
+    preset = d.get("preset", "none")
+
+    cover = _demo_cover(size, d.get("cover_upload"))
+    # 模型: lsb_toy 真嵌入; 三配方用随机权重演示结构 (标注 untrained)
+    if framework == "lsb_toy":
+        from wmflow.nodes_models import make_lsb_toy
+        msg_len = int(d.get("msg_len", 64))
+        model = make_lsb_toy(msg_len)
+        trained = True
+    else:
+        enc, dec, meta = RECIPES[framework]()
+        eb, db = enc.build(), dec.build()
+        trained = False
+        msg_len = enc.inputs["message"][0]
+
+        def _enc(cover, bits, s):
+            import torch
+            x = torch.from_numpy(cover.transpose(2, 0, 1))[None].float()
+            m = torch.from_numpy(bits.astype(np.float32))[None]
+            with torch.no_grad():
+                y = eb.as_module().eval()({"image": x, "message": m})[0]
+            out = y.permute(1, 2, 0).cpu().numpy()
+            return (1 - s) * cover + s * np.clip(out, 0, 1)
+
+        def _dec(img):
+            import torch
+            x = torch.from_numpy(img.transpose(2, 0, 1))[None].float()
+            with torch.no_grad():
+                logit = db.as_module().eval()({"image": x})[0]
+            return (logit > 0.5).cpu().numpy().astype(np.uint8)
+
+        class _M:
+            pass
+        model = _M()
+        model.encode_fn = _enc      # 实例属性, 不用类字典 (会变绑定方法吃掉 self)
+        model.decode_fn = _dec
+        model.msg_len = msg_len
+
+    rng = np.random.default_rng(seed)
+    bits = rng.integers(0, 2, size=msg_len).astype(np.uint8)
+    embedded = model.encode_fn(cover, bits, strength)
+    attacked = embedded.copy()
+    attack_params = {}
+    if layer not in ("", "none"):
+        from wmflow.nodes_core import run_layer
+        attacked, attack_params = run_layer(
+            layer, attacked, np.random.default_rng(seed + 1))
+    if preset not in ("", "none"):
+        from wmflow.nodes_core import TranscodeChain
+        attacked, p2 = TranscodeChain().execute(attacked, preset)
+        attack_params.update(p2)
+    dec_bits = model.decode_fn(attacked)
+    errs = int(np.sum(dec_bits != bits))
+    mse = float(np.mean((embedded - cover) ** 2))
+    mse_a = float(np.mean((attacked - cover) ** 2))
+
+    return {
+        "ok": True, "trained": trained, "msg_len": msg_len,
+        "attack_params": attack_params,
+        "nodes": {
+            "cover": {"kind": "image", "png": _png_b64(cover)},
+            "message": {"kind": "bits", "bits": bits.tolist()},
+            "embedded": {"kind": "image", "png": _png_b64(embedded),
+                         "psnr": round(10 * np.log10(1.0 / max(mse, 1e-10)), 2)},
+            "attacked": {"kind": "image", "png": _png_b64(attacked),
+                         "psnr": round(10 * np.log10(1.0 / max(mse_a, 1e-10)), 2)},
+            "decoded": {"kind": "bits", "bits": dec_bits.tolist(),
+                        "ref": bits.tolist()},
+            "metrics": {"ber": round(errs / msg_len, 4),
+                        "bit_errors": errs, "n_bits": int(msg_len),
+                        "psnr_embed": round(10 * np.log10(1.0 / max(mse, 1e-10)), 2),
+                        "psnr_attacked": round(10 * np.log10(1.0 / max(mse_a, 1e-10)), 2)},
+        },
+    }
+
+
+def op_trace(d):
+    """逐积木前向追踪: 每块输出缩略图 (特征图取通道均值) + 形状。"""
+    spec = NetSpec(d["spec"])
+    built = spec.build()
+    import numpy as np
+    try:
+        import torch
+    except ImportError:
+        return {"ok": False, "error": "缺 torch"}
+    size = next(v[1] for v in spec.inputs.values() if len(v) == 3)
+    msg_len = next((v[0] for v in spec.inputs.values() if len(v) == 1), None)
+    inp = {}
+    if "image" in spec.inputs:
+        inp["image"] = torch.from_numpy(
+            _demo_cover(size).transpose(2, 0, 1))[None].float()
+    if msg_len and "message" in spec.inputs:
+        rng = np.random.default_rng(0)
+        inp["message"] = torch.from_numpy(
+            rng.integers(0, 2, size=msg_len).astype(np.float32))[None]
+    out, env = built.forward_trace(inp)
+    thumbs = {}
+    for k, v in env.items():
+        thumbs[k] = {"shape": list(v.shape) if hasattr(v, "shape") else None,
+                     **_thumb(v)}
+    return {"ok": True, "output": built.output_id, "thumbs": thumbs}
+
+
 OPS = {
     "modules": op_modules, "recipes": op_recipes, "build": op_build,
     "swap": op_swap, "prompt": op_prompt, "apply_reply": op_apply_reply,
-    "forward": op_forward,
+    "forward": op_forward, "run_demo": op_run_demo, "trace": op_trace,
 }
 
 

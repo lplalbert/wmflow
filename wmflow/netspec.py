@@ -68,6 +68,14 @@ class BuildResult:
             env[mid] = fn(args[0] if len(args) == 1 else args)
         return env[self.output_id]
 
+    def forward_trace(self, inputs: Dict[str, Any]):
+        """同 forward, 但返回全部中间张量 (逐积木输入输出可视化用)。"""
+        env = dict(inputs)
+        for mid, fn, frm in self.callable_chain:
+            args = [env[f] for f in frm]
+            env[mid] = fn(args[0] if len(args) == 1 else args)
+        return env[self.output_id], env
+
     def as_module(self):
         """包装成单个 nn.Module (可进 torch 训练/推理)。"""
         import torch.nn as nn
