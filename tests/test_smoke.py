@@ -22,9 +22,10 @@ def make_cover(h=64, w=64, seed=0):
 
 def test_registry():
     info = all_node_info()
-    assert len(info) == 12, f"预期 12 节点, got {len(info)}"
+    assert len(info) == 14, f"预期 14 节点, got {len(info)}"
     assert "Embed" in info and "BERCompare" in info
-    print(f"[ok] registry: {len(info)} 节点")
+    assert "NetSpecModel" in info and "NetSpecPrompt" in info
+    print(f"[ok] registry: {len(info)} nodes")
 
 
 def test_clean_roundtrip():

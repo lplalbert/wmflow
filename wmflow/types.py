@@ -19,6 +19,7 @@ ATTACK = "ATTACK"
 PARAMS = "PARAMS"
 METRICS = "METRICS"
 REPORT = "REPORT"
+TENSOR = "TENSOR"  # 网络内部张量 (B,C,H,W) torch.Tensor —— 模块积木的连线类型
 # 标量/控制面
 INT = "INT"
 FLOAT = "FLOAT"

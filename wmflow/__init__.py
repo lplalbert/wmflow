@@ -8,5 +8,6 @@ from .engine import Executor, WorkflowError, RunResult, save_report
 # 导入即注册节点
 from . import nodes_core  # noqa: F401
 from . import nodes_models  # noqa: F401
+from . import nodes_netspec  # noqa: F401
 
 __version__ = "0.1.0"

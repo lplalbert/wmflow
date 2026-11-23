@@ -44,8 +44,13 @@ def _stable_hash(obj: Any) -> str:
             return [conv(x) for x in o]
         if isinstance(o, dict):
             return {k: conv(o[k]) for k in sorted(o)}
-        if hasattr(o, "tolist"):  # numpy
-            return {"__ndarray__": conv(o.tolist())}
+        if hasattr(o, "detach"):  # torch.Tensor → 走 bytes 摘要, 勿 tolist(巨慢)
+            t = o.detach().cpu().numpy()
+            return {"__tensor__": [str(t.dtype), list(t.shape),
+                                   hashlib.sha256(t.tobytes()).hexdigest()]}
+        if hasattr(o, "tobytes") and hasattr(o, "shape"):  # numpy
+            return {"__ndarray__": [str(o.dtype), list(o.shape),
+                                    hashlib.sha256(o.tobytes()).hexdigest()]}
         return {"__repr__": repr(o)}
     blob = json.dumps(conv(obj), sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(blob.encode("utf-8")).hexdigest()

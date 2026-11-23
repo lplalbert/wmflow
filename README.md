@@ -35,6 +35,39 @@
 
 框架适配路线：`lsb_toy` ✅ → `s2r` ✅(接口) → `stegastamp` / `hidden` / `mbrs` / `videoseal`（P1，适配器接口已留好，服务器上各框架仓在 `/home/lpl2025/lpl/`）。
 
+## 网络积木 (NetSpec) —— 模块粒度约定
+
+三层粒度（需求：显示模块、不显示单层、像搭积木一样换）：
+
+| 粒度 | 可见性 | 例子 |
+|---|---|---|
+| 层 (Conv/BN/ReLU) | ❌ 不外露，只在模块的"层组成"描述串里显示 | `Conv3x3→BN→ReLU` |
+| **模块 (积木)** | ✅ 主粒度：显示/可换/自动适配 | conv_block, res_block, se_block, msg_map, bit_head... |
+| 网络 | 模块串成 encoder/decoder (NetSpec JSON) | hidden_encoder |
+
+- **搭积木**：NetSpec = JSON 积木清单，`{"id","type","params","from"}` 逐块声明，隐式串联。
+- **随意换模块**：改 `type` 或 `apply_patch([{"id":"r4","replace_type":"se_block"}])`。
+- **自动适配参数**：`in_ch` 不填自动继承上游；通道不符**自动插 1×1 adapter**（记录在 `auto_adapters`）；`msg_map` 目标尺寸、`bit_head` 消息长自动注入；补丁套用后自动重算适配。
+- **保真口径**：经典框架为"模块级结构对照"（层宽/深度合理化，差异在 `recipes.py` 逐条注明），不称官方等价复现。
+
+已配配方（`wmflow/recipes.py`）：`hidden`（HiDDeN ECCV'18）、`stegastamp`（CVPR'20）、`mbrs`（ACM MM'21）——三者训练侧攻击（Denoiser/可微扰动/真 JPEG mini-batch）记在 `train_note`，不进推理积木。
+
+## LLM 专用 prompt（找 bug / 调参 / 自动适配闭环）
+
+每个 NetSpec 自带**系统化描述 prompt**：任务+模块目录（含层组成）+积木清单+形状解析表+约束，可直接贴任意大模型 API：
+
+```bash
+python prompt_tool.py describe hidden            # 框架系统化描述
+python prompt_tool.py debug hidden --problem "BER=0.5 不降" --tb err.txt
+python prompt_tool.py tune hidden --metrics '{"ber":0.21,"psnr":28.5}' --goal "BER<0.05 且 PSNR>30"
+python prompt_tool.py apply hidden --from-reply reply.txt   # 模型回复→补丁→自动重适配→新 NetSpec JSON
+```
+
+- 模型回复格式约定：JSON `{"analysis":..., "patch":[{"id":..., "params":{...}} | {"id":..., "replace_type":...}], "risk":...}`。
+- `apply` 闭环：解析→逐项套用→**通道/尺寸自动重适配**→build 兜底校验，非法积木/形状直接拒。
+- `prompt_tool.py ask` 可直连 API（OpenAI 兼容），凭据只走 `WMFLOW_LLM_BASE_URL / API_KEY / MODEL` 环境变量，不落代码。
+- 节点形态：`NetSpecPrompt` 节点（describe/debug/tune 三模式）可在图上出 prompt。
+
 ## 快速开始
 
 ```bash
@@ -54,8 +87,9 @@ python run.py workflows/smoke_ablation.json --validate-only
 
 ## 验证状态
 
-- [x] 12 节点注册与 schema 自省
+- [x] 14 节点注册与 schema 自省
 - [x] 干净往返 BER=0（LSB 玩具模型）
 - [x] 输入签名缓存（重跑全命中 / 换 seed 失效）
 - [x] 类型检查拦截错线
 - [x] 全链路冒烟（嵌入→combo攻击→wechat_lite→提取→BER→报告落盘）
+- [x] 积木系统：13 模块目录 / 三配方 enc→dec 前向 128² / 自动插 adapter / 换积木 / LLM 补丁闭环 / debug prompt（tests/test_netspec.py 8 项）
