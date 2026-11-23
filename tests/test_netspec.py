@@ -99,6 +99,8 @@ def test_llm_prompt_and_patch_loop():
                   '[{"id": "r4", "replace_type": "se_block"}], "risk": "低"}\n```')
     new_spec = llm.apply_response(enc, fake_reply)
     assert new_spec._by_id["r4"]["type"] == "se_block"
+    # 回显同源回归: to_json 的 spec 必须反映补丁 (曾因 modules/spec 双源丢失)
+    assert json.loads(new_spec.to_json())["modules"][7]["type"] == "se_block"
     import torch
     with torch.no_grad():
         y = new_spec.build().as_module()(

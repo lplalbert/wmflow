@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>wmflow 积木工作台</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root {
+    --bg:#0f1115; --panel:#181b22; --panel2:#1f242e; --line:#2c3340;
+    --fg:#e6e9ef; --dim:#9aa3b2; --acc:#4f8cff; --ok:#3fb96f; --warn:#e0a33e; --err:#e05e5e;
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:14px/1.5 "Segoe UI",system-ui,sans-serif; }
+  header { padding:10px 18px; background:var(--panel); border-bottom:1px solid var(--line);
+           display:flex; align-items:center; gap:16px; flex-wrap:wrap; }
+  header h1 { font-size:17px; margin:0; font-weight:600; }
+  header .sub { color:var(--dim); font-size:12px; }
+  select,button,input,textarea { background:var(--panel2); color:var(--fg);
+      border:1px solid var(--line); border-radius:6px; padding:6px 10px; font:inherit; }
+  button { cursor:pointer; }
+  button:hover { border-color:var(--acc); }
+  button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  .layout { display:grid; grid-template-columns: 1.15fr 1fr; gap:14px; padding:14px 18px; }
+  .panel { background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  .panel h2 { font-size:13px; margin:0; padding:10px 14px; border-bottom:1px solid var(--line);
+              color:var(--dim); font-weight:600; letter-spacing:.04em; }
+  .panel .body { padding:12px 14px; }
+  .chain { display:flex; flex-direction:column; gap:8px; }
+  .block { background:var(--panel2); border:1px solid var(--line); border-radius:8px;
+           padding:9px 12px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .block.adapter { border-style:dashed; opacity:.85; }
+  .block .id { font-family:ui-monospace,monospace; color:var(--dim); font-size:12px; min-width:64px; }
+  .block .type { font-weight:600; color:var(--acc); }
+  .block .layers { color:var(--dim); font-size:12px; flex-basis:100%; padding-left:74px; }
+  .block .layers::before { content:"层组成: "; color:#6b7382; }
+  .block select { padding:3px 6px; font-size:12px; }
+  .block .io { font-size:11px; color:#6b7382; font-family:ui-monospace,monospace; }
+  .arrow { text-align:center; color:#3a4252; margin:-2px 0; }
+  .tabs { display:flex; gap:2px; padding:8px 14px 0; }
+  .tabs button { border-radius:8px 8px 0 0; border-bottom:none; opacity:.65; }
+  .tabs button.on { opacity:1; background:var(--panel2); }
+  .metrics { display:grid; grid-template-columns:repeat(auto-fill,minmax(120px,1fr)); gap:8px; }
+  .metric { background:var(--panel2); border-radius:8px; padding:8px 10px; }
+  .metric .k { color:var(--dim); font-size:11px; }
+  .metric .v { font-size:16px; font-weight:600; font-family:ui-monospace,monospace; }
+  table.shape { width:100%; border-collapse:collapse; font-size:12px;
+                font-family:ui-monospace,monospace; }
+  table.shape th,table.shape td { border-bottom:1px solid var(--line);
+      padding:4px 8px; text-align:left; }
+  table.shape th { color:var(--dim); font-weight:500; }
+  textarea.prompt { width:100%; min-height:340px; font-family:ui-monospace,monospace;
+      font-size:12px; white-space:pre; }
+  .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+  .status { padding:6px 14px; font-size:12px; color:var(--dim); }
+  .status.ok { color:var(--ok); } .status.err { color:var(--err); }
+  .badge { font-size:11px; padding:1px 8px; border-radius:99px; background:#2a3140; color:var(--dim); }
+  .badge.ok { background:#1c3a2a; color:var(--ok); }
+  .badge.warn { background:#3a3020; color:var(--warn); }
+  .pill { font-size:11px; padding:1px 8px; border-radius:99px; background:#263042; color:var(--acc); }
+  a { color:var(--acc); }
+</style>
+</head>
+<body>
+<header>
+  <h1>wmflow 积木工作台</h1>
+  <span class="sub">模块级积木 · 自动适配 · 服务器算力 · LLM 专用 prompt</span>
+  <div style="flex:1"></div>
+  <label class="sub">框架
+    <select id="fw">
+      <option value="hidden">hidden (HiDDeN)</option>
+      <option value="stegastamp">stegastamp</option>
+      <option value="mbrs">mbrs</option>
+    </select>
+  </label>
+  <label class="sub">网络
+    <select id="part"><option value="encoder">encoder</option>
+      <option value="decoder">decoder</option></select>
+  </label>
+  <button class="primary" onclick="loadRecipe()">载入</button>
+</header>
+
+<div class="layout">
+  <div>
+    <div class="panel">
+      <h2>积木链 <span id="chainName" class="pill"></span>
+        <span id="chainBadge" class="badge"></span></h2>
+      <div class="body">
+        <div class="chain" id="chain"></div>
+        <div class="row" style="margin-top:12px">
+          <button class="primary" onclick="runForward()">▶ 服务器前向测试</button>
+          <button onclick="buildOnly()">校验形状</button>
+          <button onclick="loadRecipe()">重置</button>
+          <span id="runStatus" class="status"></span>
+        </div>
+        <div class="metrics" id="runMetrics"></div>
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:14px">
+      <h2>形状解析表 (含自动适配)</h2>
+      <div class="body" id="shapeWrap"><div class="status">载入配方后显示</div></div>
+    </div>
+  </div>
+
+  <div>
+    <div class="panel">
+      <div class="tabs">
+        <button id="tab-describe" class="on" onclick="setMode('describe')">框架描述</button>
+        <button id="tab-debug" onclick="setMode('debug')">找 bug</button>
+        <button id="tab-tune" onclick="setMode('tune')">调参</button>
+        <button id="tab-reply" onclick="setMode('reply')">贴回复·套补丁</button>
+      </div>
+      <div class="body">
+        <div id="opt-debug" style="display:none">
+          <div class="row"><textarea id="problem" rows="3" style="width:100%"
+            placeholder="问题现象, 例如: 训练后 BER=0.5 不降"></textarea></div>
+          <div class="row"><textarea id="tb" rows="3" style="width:100%"
+            placeholder="报错/日志 (可空)"></textarea></div>
+        </div>
+        <div id="opt-tune" style="display:none">
+          <div class="row">
+            <input id="metrics" style="flex:1" placeholder='指标 JSON, 如 {"ber":0.21,"psnr":28.5}'>
+            <input id="goal" style="flex:1" value="降低 BER 同时保持 PSNR">
+          </div>
+        </div>
+        <div id="opt-reply" style="display:none">
+          <div class="row"><textarea id="reply" rows="8" style="width:100%"
+            placeholder='贴大模型回复 (含 ```json {"patch":[...]} ``` 即可)'></textarea></div>
+          <div class="row">
+            <button class="primary" onclick="applyReply()">解析并套用补丁 (自动适配)</button>
+            <span id="replyStatus" class="status"></span>
+          </div>
+        </div>
+        <div class="row">
+          <button class="primary" onclick="genPrompt()">生成 prompt</button>
+          <button onclick="copyPrompt()">复制</button>
+          <span id="promptStatus" class="status"></span>
+        </div>
+        <textarea id="prompt" class="prompt" readonly></textarea>
+      </div>
+    </div>
+    <div class="status" id="foot">
+      积木 = 若干网络层组成的模块 (内部层构成见每块的"层组成") · 换积木用下拉 ·
+      通道不符自动插 1x1 adapter · prompt 可贴任意大模型
+    </div>
+  </div>
+</div>
+
+<script>
+let RECIPES = null, MODULES = null;
+let spec = null;   // 当前网络 spec 对象
+
+const $ = id => document.getElementById(id);
+
+async function api(path, body) {
+  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'},
+                      body: JSON.stringify(body)}
+                   : {method:'GET'};
+  const r = await fetch(path, opt);
+  return r.json();
+}
+
+function fmtShape(s) {
+  return Array.isArray(s) ? JSON.stringify(s) : String(s);
+}
+
+function renderChain() {
+  const c = $('chain');
+  c.innerHTML = '';
+  const mods = spec.modules;
+  mods.forEach((m, i) => {
+    if (i > 0) { const a = document.createElement('div');
+      a.className='arrow'; a.textContent='↓'; c.appendChild(a); }
+    const md = MODULES[m.type] || {layers:'?', category:'?'};
+    const div = document.createElement('div');
+    div.className = 'block';
+    const opts = Object.keys(MODULES).map(t =>
+      `<option value="${t}" ${t===m.type?'selected':''}>${t}</option>`).join('');
+    const from = (m.from && m.from.length) ? m.from.join(', ') : '(上一块)';
+    const params = m.params ? JSON.stringify(m.params) : '{}';
+    div.innerHTML = `
+      <span class="id">${m.id}</span>
+      <span class="type">
+        <select onchange="swapType(${i}, this.value)">${opts}</select>
+      </span>
+      <span class="io">from: ${from}</span>
+      <span class="io">params: <input value='${params.replace(/'/g,"&#39;")}'
+        style="width:220px;font-size:11px;padding:2px 6px"
+        onchange="swapParams(${i}, this.value)"></span>
+      <span class="layers">${md.layers}</span>`;
+    c.appendChild(div);
+  });
+  $('chainName').textContent = spec.name;
+}
+
+function renderTable(rep) {
+  const w = $('shapeWrap');
+  if (!rep) { w.innerHTML = '<div class="status">—</div>'; return; }
+  if (!rep.ok) {
+    w.innerHTML = `<div class="status err">构建失败: ${rep.error}</div>`;
+    $('chainBadge').textContent = 'build 失败';
+    $('chainBadge').className = 'badge warn';
+    return;
+  }
+  const rows = rep.table.map(t => `<tr>
+      <td>${t.id}</td><td>${t.type}</td>
+      <td>${t.in.map(fmtShape).join(' | ')}</td>
+      <td>${t.out.map(fmtShape).join(' | ')}</td>
+      <td>${JSON.stringify(t.params)}</td></tr>`).join('');
+  const ad = rep.auto_adapters.length
+    ? `<div class="status">自动适配: ${JSON.stringify(rep.auto_adapters)}</div>` : '';
+  w.innerHTML = `<table class="shape">
+      <tr><th>id</th><th>积木</th><th>输入形状</th><th>输出形状</th><th>解析后参数</th></tr>
+      ${rows}</table>${ad}
+      <div class="status ok">输出形状 ${fmtShape(rep.out_shape)}</div>`;
+  $('chainBadge').textContent = `积木 ${rep.table.length} · 输出 ${fmtShape(rep.out_shape)}`;
+  $('chainBadge').className = 'badge ok';
+}
+
+async function loadRecipe() {
+  if (!RECIPES) {
+    const [rs, ms] = await Promise.all([api('/api/recipes'), api('/api/modules')]);
+    RECIPES = rs.recipes; MODULES = ms.modules;
+  }
+  const fw = $('fw').value, part = $('part').value;
+  spec = JSON.parse(JSON.stringify(RECIPES[fw][part]));
+  renderChain();
+  await buildOnly();
+}
+
+async function buildOnly() {
+  const r = await api('/api/build', {spec});
+  renderTable(r.report);
+}
+
+function setMode(m) {
+  ['describe','debug','tune','reply'].forEach(x => {
+    $('tab-'+x).className = x===m ? 'on' : '';
+    $('opt-'+x) && ($('opt-'+x).style.display = x===m ? 'block' : 'none');
+  });
+  $('prompt').value = '';
+}
+
+async function genPrompt() {
+  const m = ['debug','tune','reply'].find(x => $('tab-'+x).className==='on') || 'describe';
+  const body = {spec, mode: m==='reply'?'describe':m,
+                problem: $('problem').value, traceback: $('tb').value,
+                metrics: JSON.parse($('metrics').value || '{}'),
+                goal: $('goal').value};
+  const r = await api('/api/prompt', body);
+  $('prompt').value = r.prompt;
+  $('promptStatus').textContent = `已生成 (${m} 模式, ${r.prompt.length} 字符)`;
+  $('promptStatus').className = 'status ok';
+}
+
+function copyPrompt() {
+  navigator.clipboard.writeText($('prompt').value);
+  $('promptStatus').textContent = '已复制到剪贴板';
+}
+
+async function swapType(i, t) {
+  const r = await api('/api/swap', {spec, patch:[{id: spec.modules[i].id,
+                                                   replace_type: t}]});
+  if (!r.ok) { alert('换积木失败: ' + r.error); return; }
+  spec = r.spec; renderChain(); renderTable(r.report);
+}
+
+async function swapParams(i, text) {
+  let p;
+  try { p = JSON.parse(text); } catch(e) { alert('参数须是 JSON 对象'); return; }
+  const r = await api('/api/swap', {spec, patch:[{id: spec.modules[i].id, params: p}]});
+  if (!r.ok) { alert('改参数失败: ' + r.error); return; }
+  spec = r.spec; renderChain(); renderTable(r.report);
+}
+
+async function runForward() {
+  $('runStatus').textContent = '服务器前向运行中...';
+  $('runStatus').className = 'status';
+  const part = $('part').value;
+  const enc = part==='encoder' ? spec : RECIPES[$('fw').value].encoder;
+  const dec = part==='decoder' ? spec : RECIPES[$('fw').value].decoder;
+  const r = await api('/api/forward', {encoder: enc, decoder: dec, batch: 2});
+  if (!r.ok) {
+    $('runStatus').textContent = r.error;
+    $('runStatus').className = 'status err';
+    return;
+  }
+  $('runStatus').innerHTML = `✓ 前向通过 · <b>${r.device}</b>` +
+    (r.gpu ? ` (${r.gpu})` : '');
+  $('runStatus').className = 'status ok';
+  $('runMetrics').innerHTML = [
+    ['耗时', r.ms + ' ms'], ['参数量', (r.params/1e6).toFixed(2) + ' M'],
+    ['enc 输出', fmtShape(r.enc_out)], ['dec 输出', fmtShape(r.dec_out)],
+    ['输出范围', r.enc_range.join(' ~ ')],
+  ].map(([k,v]) => `<div class="metric"><div class="k">${k}</div>
+      <div class="v">${v}</div></div>`).join('');
+}
+
+async function applyReply() {
+  const r = await api('/api/apply_reply', {spec, reply: $('reply').value});
+  const s = $('replyStatus');
+  if (!r.ok) { s.textContent = '失败: ' + r.error; s.className='status err'; return; }
+  spec = r.spec; renderChain(); renderTable(r.report);
+  s.textContent = '✓ 补丁已套用, 自动适配完成'; s.className='status ok';
+  $('prompt').value = r.prompt;
+}
+
+loadRecipe();
+</script>
+</body>
+</html>

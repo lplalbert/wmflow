@@ -97,10 +97,12 @@ class NetSpecError(ValueError):
 class NetSpec:
     def __init__(self, spec: Dict[str, Any]):
         self.spec = copy.deepcopy(spec)
-        self.name = spec.get("name", "net")
-        self.inputs: Dict[str, Shape] = {k: tuple(v) for k, v in spec["input"].items()}
-        self.modules: List[Dict[str, Any]] = spec["modules"]
-        self.output: str = spec.get("output", self.modules[-1]["id"])
+        self.name = self.spec.get("name", "net")
+        self.inputs: Dict[str, Shape] = {k: tuple(v)
+                                         for k, v in self.spec["input"].items()}
+        # 注意: modules 必须取自 self.spec (deepcopy 之后), 否则补丁改的与回显的不同源
+        self.modules: List[Dict[str, Any]] = self.spec["modules"]
+        self.output: str = self.spec.get("output", self.modules[-1]["id"])
         self._by_id = {m["id"]: m for m in self.modules}
         if len(self._by_id) != len(self.modules):
             raise NetSpecError("模块 id 重复")
