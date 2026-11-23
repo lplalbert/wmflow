@@ -24,6 +24,7 @@
   button { cursor:pointer; }
   button:hover { border-color:var(--acc); }
   button.primary { background:var(--acc); border-color:var(--acc); color:#fff; }
+  button.danger { background:#5a2430; border-color:var(--err); color:#ff9c9c; }
   .seg { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
   .seg button { border:none; border-radius:0; padding:5px 14px; opacity:.6; }
   .seg button.on { opacity:1; background:var(--acc); color:#fff; }
@@ -34,7 +35,6 @@
   .canvas svg.links { position:absolute; inset:0; width:100%; height:100%;
       pointer-events:none; overflow:visible; }
 
-  /* ---- 节点卡片 (ComfyUI 式) ---- */
   .node { position:absolute; width:252px; background:var(--panel);
           border:1px solid var(--line); border-radius:10px; overflow:hidden;
           box-shadow:0 4px 18px rgba(0,0,0,.35); }
@@ -56,8 +56,7 @@
   .port-row .ptype { font-family:ui-monospace,monospace; font-size:10px;
                      padding:0 5px; border-radius:4px; background:#263042; }
   .preview { margin-top:7px; }
-  .preview img { width:100%; border-radius:6px; display:block;
-                 background:#000; image-rendering:auto; }
+  .preview img { width:100%; border-radius:6px; display:block; background:#000; }
   .bits { display:flex; flex-wrap:wrap; gap:2px; }
   .bits i { width:9px; height:9px; border-radius:2px; display:block; }
   .kvs { display:grid; grid-template-columns:1fr 1fr; gap:4px 10px; }
@@ -65,10 +64,7 @@
   .kvs .v { font-family:ui-monospace,monospace; font-size:13px; font-weight:600; }
   .caption { color:var(--dim); font-size:10.5px; margin-top:4px;
              font-family:ui-monospace,monospace; }
-  .tag { display:inline-block; font-size:10px; padding:0 6px; border-radius:4px;
-         background:#263042; color:var(--dim); margin:1px 2px 1px 0; }
 
-  /* ---- 右栏 ---- */
   .side { width:340px; flex:none; border-left:1px solid var(--line);
           background:var(--panel); display:flex; flex-direction:column; min-height:0; }
   .side .tabs { display:flex; border-bottom:1px solid var(--line); flex:none; }
@@ -80,13 +76,42 @@
   .row { display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-bottom:9px; }
   .status { font-size:12px; color:var(--dim); }
   .status.ok { color:var(--ok); } .status.err { color:var(--err); }
-  .legend { display:flex; gap:12px; font-size:11px; color:var(--dim); }
+  .legend { display:flex; gap:12px; font-size:11px; color:var(--dim); flex-wrap:wrap; }
   .legend b { display:inline-block; width:10px; height:10px; border-radius:50%;
               margin-right:4px; vertical-align:-1px; }
   .ctrl { display:flex; gap:8px; align-items:center; flex-wrap:wrap; padding:8px 16px;
           background:var(--panel); border-bottom:1px solid var(--line); flex:none; }
   .ctrl label { font-size:12px; color:var(--dim); display:flex; gap:5px;
                 align-items:center; }
+
+  /* 训练面板 */
+  .train-grid { display:grid; grid-template-columns:1.1fr 1fr; gap:14px;
+                padding:14px; height:100%; overflow-y:auto; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:10px;
+          padding:12px 14px; }
+  .card h3 { margin:0 0 10px; font-size:13px; color:var(--dim); font-weight:600; }
+  .kv-form { display:grid; grid-template-columns:auto 1fr; gap:6px 10px;
+             align-items:center; font-size:12.5px; }
+  .kv-form input,.kv-form select { width:100%; }
+  .dirrow { display:flex; gap:8px; padding:4px 8px; border-radius:6px;
+            cursor:pointer; font-size:12px; align-items:center; }
+  .dirrow:hover { background:var(--panel2); }
+  .dirrow .n { margin-left:auto; color:var(--dim); font-family:ui-monospace,monospace; }
+  .chk { display:inline-flex; gap:4px; align-items:center; font-size:12px;
+         margin:2px 8px 2px 0; cursor:pointer; }
+  .pbar { height:10px; background:var(--panel2); border-radius:99px; overflow:hidden; }
+  .pbar i { display:block; height:100%; background:var(--acc); }
+  table.hist { width:100%; border-collapse:collapse; font-size:11.5px;
+               font-family:ui-monospace,monospace; }
+  table.hist th,table.hist td { border-bottom:1px solid var(--line); padding:3px 6px;
+      text-align:left; }
+  .logbox { background:#12151b; border:1px solid var(--line); border-radius:8px;
+            padding:8px 10px; font-family:ui-monospace,monospace; font-size:11px;
+            max-height:180px; overflow-y:auto; white-space:pre-wrap; }
+  .pvrow { display:flex; gap:8px; }
+  .pvrow figure { margin:0; flex:1; }
+  .pvrow img { width:100%; border-radius:6px; }
+  .pvrow figcaption { font-size:10.5px; color:var(--dim); text-align:center; }
 </style>
 </head>
 <body>
@@ -96,10 +121,11 @@
   <div class="seg">
     <button id="view-pipe" class="on" onclick="setView('pipe')">流水线</button>
     <button id="view-blocks" onclick="setView('blocks')">积木链</button>
+    <button id="view-train" onclick="setView('train')">训练</button>
   </div>
   <span class="sub">节点图 · 输入输出直视 · 服务器算力</span>
   <div style="flex:1"></div>
-  <div class="legend">
+  <div class="legend" id="legend">
     <span><b style="background:var(--c-image)"></b>IMAGE</span>
     <span><b style="background:var(--c-msg)"></b>MESSAGE</span>
     <span><b style="background:var(--c-metrics)"></b>METRICS</span>
@@ -107,6 +133,7 @@
   </div>
 </header>
 
+<!-- ============ 流水线控制 ============ -->
 <div class="ctrl" id="ctrl-pipe">
   <label>框架 <select id="fw">
     <option value="lsb_toy">lsb_toy (真嵌入演示)</option>
@@ -114,6 +141,7 @@
     <option value="stegastamp">stegastamp</option>
     <option value="mbrs">mbrs</option>
   </select></label>
+  <label>权重 <select id="ckpt"><option value="">未训练</option></select></label>
   <label>退化层 <select id="layer">
     <option value="none">none</option><option value="combo_builtin">combo_builtin</option>
     <option value="jpeg">jpeg</option><option value="blur">blur</option>
@@ -127,14 +155,16 @@
   <label>strength <input id="strength" type="number" value="1.0" step="0.1"
     min="0" max="1" style="width:64px"></label>
   <label>seed <input id="seed" type="number" value="0" style="width:72px"></label>
-  <label>载体图 <input id="cover" type="file" accept="image/*" style="width:180px"></label>
+  <label>载体图 <input id="cover" type="file" accept="image/*" style="width:170px"></label>
   <button class="primary" onclick="runDemo()">▶ 运行流水线</button>
   <span id="pipeStatus" class="status"></span>
 </div>
 
+<!-- ============ 积木链控制 ============ -->
 <div class="ctrl" id="ctrl-blocks" style="display:none">
   <label>网络 <select id="part">
-    <option value="encoder">encoder</option><option value="decoder">decoder</option>
+    <option value="encoder">encoder (image+msg → 水印图)</option>
+    <option value="decoder">decoder (image → bit logits)</option>
   </select></label>
   <label>框架 <select id="fw2">
     <option value="hidden">hidden</option><option value="stegastamp">stegastamp</option>
@@ -143,12 +173,87 @@
   <button class="primary" onclick="runTrace()">▶ 逐积木追踪</button>
   <button onclick="loadBlocks()">重置</button>
   <span id="blockStatus" class="status"></span>
+  <div class="legend" style="margin-left:auto">
+    <span><b style="background:#e0a33e"></b>message 消息处理</span>
+    <span><b style="background:#3fb96f"></b>fusion 融合/输出</span>
+    <span><b style="background:#e05e5e"></b>head 比特头</span>
+    <span><b style="background:#4f8cff"></b>basic 主干</span>
+    <span><b style="background:#b573ff"></b>attention</span>
+  </div>
 </div>
 
 <div class="main">
   <div class="canvas-wrap" id="wrap">
     <div class="canvas" id="canvas">
       <svg class="links" id="links"></svg>
+    </div>
+    <!-- 训练面板 -->
+    <div class="train-grid" id="trainPanel" style="display:none">
+      <div>
+        <div class="card">
+          <h3>数据集 (服务器路径)</h3>
+          <div class="row">
+            <input id="dsPath" style="flex:1" placeholder="/home/lpl2025/lpl/Datasets/DIV2K">
+            <button onclick="fsScan()">扫描</button>
+            <button onclick="fsUp()">上一级</button>
+          </div>
+          <div id="fsList"></div>
+          <div class="kv-form" style="margin-top:10px">
+            <label>图片数量</label><input id="nImages" type="number" value="200" min="2">
+            <label>图像尺寸</label><input id="dsSize" type="number" value="128" step="32">
+          </div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h3>噪声层 (训练期, 可多选)</h3>
+          <div id="atkChecks"></div>
+          <div class="caption" style="margin-top:6px">
+            jpeg_approx = DCT+STE 可微近似; combo = 每批随机组合; none = 不加噪</div>
+        </div>
+      </div>
+      <div>
+        <div class="card">
+          <h3>训练参数</h3>
+          <div class="kv-form">
+            <label>框架</label><select id="tFw">
+              <option value="hidden">hidden</option>
+              <option value="stegastamp">stegastamp</option>
+              <option value="mbrs">mbrs</option></select>
+            <label>epochs</label><input id="tEpochs" type="number" value="5" min="1">
+            <label>batch_size</label><input id="tBatch" type="number" value="16" min="1">
+            <label>lr</label><input id="tLr" type="number" value="0.001" step="0.0001">
+            <label>strength</label><input id="tStrength" type="number" value="1.0" step="0.1">
+            <label>w_img</label><input id="tWimg" type="number" value="1.0" step="0.1">
+            <label>w_msg</label><input id="tWmsg" type="number" value="1.0" step="0.1">
+            <label>seed</label><input id="tSeed" type="number" value="0">
+          </div>
+          <div class="row" style="margin-top:12px">
+            <button class="primary" onclick="trainStart()">▶ 开始训练</button>
+            <button class="danger" onclick="trainStop()">停止</button>
+            <span id="tStatus" class="status"></span>
+          </div>
+          <div class="pbar"><i id="tBar" style="width:0%"></i></div>
+          <div class="caption" id="tProg">未开始</div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h3>训练预览 (每 epoch 首样本)</h3>
+          <div class="pvrow" id="tPrev">
+            <figure><figcaption>cover</figcaption></figure>
+            <figure><figcaption>watermarked</figcaption></figure>
+            <figure><figcaption>attacked</figcaption></figure>
+          </div>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h3>loss / BER</h3>
+          <table class="hist" id="tHist">
+            <tr><th>ep</th><th>loss</th><th>img</th><th>msg</th><th>ber</th></tr>
+          </table>
+        </div>
+        <div class="card" style="margin-top:14px">
+          <h3>日志</h3>
+          <div class="logbox" id="tLog">等待启动…</div>
+          <div class="caption" id="tCkpt"></div>
+        </div>
+      </div>
     </div>
   </div>
   <div class="side">
@@ -194,6 +299,8 @@
 const TYPE_COLOR = { IMAGE:'var(--c-image)', MESSAGE:'var(--c-msg)',
   METRICS:'var(--c-metrics)', TENSOR:'var(--c-tensor)', WM_MODEL:'var(--err)',
   PARAMS:'var(--dim)' };
+const CAT_COLOR = { basic:'#4f8cff', message:'#e0a33e', fusion:'#3fb96f',
+  head:'#e05e5e', attention:'#b573ff', auto:'#9aa3b2', util:'#9aa3b2' };
 const $ = id => document.getElementById(id);
 let RECIPES=null, MODULES=null;
 let view='pipe', graph={nodes:[],links:[]}, blocksSpec=null, editSel=null;
@@ -205,7 +312,7 @@ async function api(path, body) {
   return r.json();
 }
 
-/* ================= 画布渲染: 节点 + 贝塞尔连线 ================= */
+/* ================= 画布 ================= */
 function renderGraph() {
   const canvas = $('canvas');
   [...canvas.querySelectorAll('.node')].forEach(n => n.remove());
@@ -213,22 +320,19 @@ function renderGraph() {
   svg.innerHTML = '';
   const pos = {};
   for (const n of graph.nodes) {
-    pos[n.id] = {x:n.x, y:n.y, w:252, inY:[], outY:[]};
     const div = document.createElement('div');
     div.className = 'node';
     div.style.left = n.x+'px'; div.style.top = n.y+'px';
-    const color = TYPE_COLOR[n.tint] || 'var(--acc)';
+    const color = n.dot || TYPE_COLOR[n.tint] || 'var(--acc)';
     let ports = '';
-    (n.inputs||[]).forEach((p,i) => {
+    (n.inputs||[]).forEach(p => {
       const c = TYPE_COLOR[p.type] || '#888';
-      pos[n.id].inY[i] = n.y + 30 + 8 + i*22 + 11;
       ports += `<div class="port-row in"><span class="port-dot"
         style="background:${c}"></span><span class="ptype" style="color:${c}">${p.type}</span>
         <span class="pname">${p.name}</span></div>`;
     });
-    (n.outputs||[]).forEach((p,i) => {
+    (n.outputs||[]).forEach(p => {
       const c = TYPE_COLOR[p.type] || '#888';
-      pos[n.id].outY[i] = n.y + 30 + 8 + i*22 + 11;
       ports += `<div class="port-row out"><span class="pname">${p.name}</span>
         <span class="ptype" style="color:${c}">${p.type}</span>
         <span class="port-dot" style="background:${c}"></span></div>`;
@@ -240,12 +344,14 @@ function renderGraph() {
         <div class="caption">${n.caption||''}</div></div>`;
     if (n.onclick) div.onclick = n.onclick;
     canvas.appendChild(div);
-    // 量真实高度以校准连线端口
-    const h = div.offsetHeight;
-    pos[n.id].h = h;
-    const inCount=(n.inputs||[]).length, outCount=(n.outputs||[]).length;
-    for (let i=0;i<inCount;i++) pos[n.id].inY[i] = n.y + 38 + 8 + i*22 + 11;
-    for (let i=0;i<outCount;i++) pos[n.id].outY[i] = n.y + 38 + 8 + i*22 + 11;
+    // 精确测量端口锚点 (端口点相对节点的偏移)
+    pos[n.id] = {x:n.x, y:n.y, w:div.offsetWidth, inY:[], outY:[]};
+    div.querySelectorAll('.port-row.in').forEach((row,i) => {
+      pos[n.id].inY[i] = n.y + row.offsetTop + row.offsetHeight/2;
+    });
+    div.querySelectorAll('.port-row.out').forEach((row,i) => {
+      pos[n.id].outY[i] = n.y + row.offsetTop + row.offsetHeight/2;
+    });
   }
   for (const l of graph.links) {
     const a = pos[l.from[0]], b = pos[l.to[0]];
@@ -263,7 +369,7 @@ function renderGraph() {
   }
 }
 
-/* ================= 预览渲染 ================= */
+/* ================= 预览 ================= */
 function pvImage(png, caption) {
   return `<img src="data:image/png;base64,${png}">` +
     (caption ? `<div class="caption">${caption}</div>` : '');
@@ -296,7 +402,7 @@ function pvThumb(t) {
   return '';
 }
 
-/* ================= 流水线视图 ================= */
+/* ================= 流水线 ================= */
 function pipeGraph(d) {
   const N = d.nodes;
   const g = {nodes:[], links:[]};
@@ -308,7 +414,7 @@ function pipeGraph(d) {
     tint:'MESSAGE', badge:'INPUT',
     outputs:[{name:'bits', type:'MESSAGE'}], preview:pvBits(N.message.bits)});
   g.nodes.push({id:'embed', x:col(1), y:40, title:'Embed 嵌入',
-    tint:'IMAGE', badge:d.trained?'':'untrained',
+    tint:'IMAGE', badge:d.trained?'trained':'untrained',
     inputs:[{name:'cover', type:'IMAGE'},{name:'msg', type:'MESSAGE'}],
     outputs:[{name:'image', type:'IMAGE'}],
     preview:pvImage(N.embedded.png, `PSNR ${N.embedded.psnr} dB vs 载体`)});
@@ -320,7 +426,7 @@ function pipeGraph(d) {
     caption: Object.keys(d.attack_params||{}).length
       ? JSON.stringify(d.attack_params) : 'layer=none, preset=none'});
   g.nodes.push({id:'dec', x:col(3), y:40, title:'Decode 提取',
-    tint:'MESSAGE', badge:d.trained?'':'untrained',
+    tint:'MESSAGE', badge:d.trained?'trained':'untrained',
     inputs:[{name:'image', type:'IMAGE'}],
     outputs:[{name:'bits', type:'MESSAGE'}],
     preview:pvBits(N.decoded.bits, N.decoded.ref)});
@@ -352,7 +458,8 @@ async function runDemo() {
   const d = await api('/api/run_demo', {
     framework: $('fw').value, layer: $('layer').value,
     preset: $('preset').value, strength: +$('strength').value,
-    seed: +$('seed').value, cover_upload });
+    seed: +$('seed').value, cover_upload,
+    ckpt_path: $('ckpt').value || null });
   if (!d.ok) {
     $('pipeStatus').textContent = d.error || '失败';
     $('pipeStatus').className = 'status err'; return;
@@ -360,11 +467,18 @@ async function runDemo() {
   graph = pipeGraph(d);
   renderGraph();
   $('pipeStatus').innerHTML = `✓ 完成 · BER <b>${d.nodes.metrics.ber}</b>` +
-    (d.trained ? '' : ' · <span style="color:var(--warn)">配方为结构演示 (随机权重)</span>');
+    (d.trained ? '' : ' · <span style="color:var(--warn)">结构演示 (随机权重)</span>');
   $('pipeStatus').className = 'status ok';
 }
 
-/* ================= 积木链视图 ================= */
+async function refreshRuns() {
+  const r = await api('/api/runs');
+  const sel = $('ckpt');
+  sel.innerHTML = '<option value="">未训练</option>' +
+    r.runs.map(x => `<option value="${x.ckpt}">${x.run}</option>`).join('');
+}
+
+/* ================= 积木链 (分类着色, 端点差异化) ================= */
 async function loadBlocks() {
   if (!RECIPES) {
     const [rs, ms] = await Promise.all([api('/api/recipes'), api('/api/modules')]);
@@ -378,37 +492,42 @@ async function loadBlocks() {
 function drawBlocks(thumbs) {
   const g = {nodes:[], links:[]};
   const isEnc = !!blocksSpec.input.message;
-  // 输入节点
-  let y = 40;
   const inIds = {};
+  let y = 40;
   for (const [name, shape] of Object.entries(blocksSpec.input)) {
     const id = 'in_'+name; inIds[name] = id;
-    const t = thumbs[name] ? pvThumb(thumbs[name]) : `<div class="caption">shape ${JSON.stringify(shape)}</div>`;
+    const t = thumbs[name] ? pvThumb(thumbs[name])
+      : `<div class="caption">shape ${JSON.stringify(shape)}</div>`;
     g.nodes.push({id, x:40, y, title:`输入 ${name}`,
       tint: name==='message'?'MESSAGE':'IMAGE', badge:'INPUT',
       outputs:[{name, type: name==='message'?'MESSAGE':'TENSOR'}], preview:t});
-    y += 240;
+    y += 250;
   }
   const colX = i => 340 + i*272;
+  const msgRowY = 40, mainRowY = isEnc ? 280 : 80;
   let prevId = 'in_' + Object.keys(blocksSpec.input)[0];
   blocksSpec.modules.forEach((m,i) => {
     const t = thumbs[m.id];
-    const md = MODULES[m.type] || {layers:''};
-    const inType = m.type==='bit_head' ? 'TENSOR' : 'TENSOR';
+    const md = MODULES[m.type] || {layers:'', category:'basic'};
+    const cat = md.category || 'basic';
     const outType = m.type==='bit_head' ? 'MESSAGE'
       : (m.type==='residual_add' ? 'IMAGE' : 'TENSOR');
     const ins = [];
     const frm = m.from && m.from.length ? m.from : [prevId.replace(/^in_/,'')];
-    // 规范化 from → 节点 id
-    const fromIds = frm.map(f => f in inIds ? inIds[f]
-      : (f.startsWith('in_') ? f : f));
-    fromIds.forEach((f,k) => ins.push({name:frm[k], type:
-      frm[k]==='message'?'MESSAGE':(frm[k]==='image'?'IMAGE':'TENSOR')}));
+    const fromIds = frm.map(f => inIds[f] ? inIds[f] : f);
+    fromIds.forEach(f => ins.push({name:f, type:
+      f==='in_message'||f==='message'?'MESSAGE':
+      (f==='in_image'||f==='image'?'IMAGE':'TENSOR')}));
+    // message 处理块抬到上排, 其余主排 —— encoder/decoder 结构一眼可辨
+    const rowY = (cat==='message') ? msgRowY : mainRowY;
+    const outLabel = m.type==='residual_add' ? 'wm(x+cover)'
+      : (m.type==='bit_head' ? 'logits' : 'out');
     g.nodes.push({
-      id:m.id, x:colX(i), y:60+((i%2)*20), title:`${m.id} · ${m.type}`,
-      tint: outType, badge:`${(t&&t.shape)?JSON.stringify(t.shape).replace(/[\",]/g,''):''}`,
+      id:m.id, x:colX(i), y:rowY, title:`${m.id} · ${m.type}`,
+      tint: outType, dot: CAT_COLOR[cat],
+      badge:(t&&t.shape)?JSON.stringify(t.shape).replace(/[\",]/g,''):'',
       inputs: ins,
-      outputs:[{name:'out', type: outType}],
+      outputs:[{name:outLabel, type: outType}],
       preview: t ? pvThumb(t) : '',
       caption: md.layers,
       onclick: () => openEdit(m.id),
@@ -418,19 +537,22 @@ function drawBlocks(thumbs) {
     prevId = m.id;
   });
   graph = g; renderGraph();
+  $('blockStatus').innerHTML = isEnc
+    ? '结构特征: <b>双输入汇合</b> (image+message → msg_map·concat) · 编码主干 · <b>残差加回 cover</b>'
+    : '结构特征: <b>单输入</b> 下采样主干 · <b>bit_head 出 logits</b> (无图像输出)';
+  $('blockStatus').className = 'status';
 }
 
 async function runTrace() {
   $('blockStatus').textContent = '追踪中...';
-  $('blockStatus').className = 'status';
-  if (!blocksSpec) loadBlocks();
+  if (!blocksSpec) { await loadBlocks(); }
   const d = await api('/api/trace', {spec: blocksSpec});
   if (!d.ok) {
     $('blockStatus').textContent = d.error; $('blockStatus').className='status err';
     return;
   }
   drawBlocks(d.thumbs);
-  $('blockStatus').innerHTML = `✓ 逐积木输出已显示 · 输出节点 <b>${d.output}</b>`;
+  $('blockStatus').innerHTML += ` · ✓ 逐积木输出已显示 (${d.output})`;
   $('blockStatus').className = 'status ok';
 }
 
@@ -463,7 +585,102 @@ async function applyEdit() {
   $('editStatus').className = 'status ok';
 }
 
-/* ================= LLM prompt ================= */
+/* ================= 训练 ================= */
+const ATTACKS = ['none','gaussian_noise','blur','jpeg_approx','crop_resize','dropout','combo'];
+function initTrainUI() {
+  $('atkChecks').innerHTML = ATTACKS.map(a =>
+    `<label class="chk"><input type="checkbox" value="${a}"
+      ${a==='combo'?'checked':''}> ${a}</label>`).join('');
+  fsScan();
+}
+
+async function fsScan() {
+  const path = $('dsPath').value.trim();
+  const r = await api('/api/fs', {path});
+  const el = $('fsList');
+  if (r.error) { el.innerHTML = `<div class="status err">${r.error}</div>`; return; }
+  if (r.roots) {
+    $('dsPath').value = r.roots[0];
+    return fsScan();
+  }
+  let h = `<div class="row"><b style="font-size:12px">${r.path}</b>
+    <span class="status">本目录图片: ${r.n_images}</span></div>`;
+  for (const d of r.dirs) {
+    h += `<div class="dirrow" onclick="fsEnter('${d.path.replace(/'/g,"\\'")}')">
+      📁 ${d.name}<span class="n">${d.n_images} 图</span></div>`;
+  }
+  if (!r.dirs.length) h += '<div class="status">（无子目录）</div>';
+  el.innerHTML = h;
+}
+function fsEnter(p) { $('dsPath').value = p; fsScan(); }
+function fsUp() {
+  const p = $('dsPath').value.trim().replace(/\/+$/,'');
+  $('dsPath').value = p.substring(0, p.lastIndexOf('/')) || '/';
+  fsScan();
+}
+
+async function trainStart() {
+  const attacks = [...$('atkChecks').querySelectorAll('input:checked')]
+    .map(x => x.value);
+  const cfg = {
+    dataset_path: $('dsPath').value.trim(),
+    n_images: +$('nImages').value, size: +$('dsSize').value,
+    framework: $('tFw').value,
+    epochs: +$('tEpochs').value, batch_size: +$('tBatch').value,
+    lr: +$('tLr').value, strength: +$('tStrength').value,
+    w_img: +$('tWimg').value, w_msg: +$('tWmsg').value,
+    seed: +$('tSeed').value, attacks };
+  const r = await api('/api/train_start', cfg);
+  if (!r.ok) { $('tStatus').textContent = r.error; $('tStatus').className='status err'; return; }
+  $('tStatus').textContent = '训练中…'; $('tStatus').className='status ok';
+}
+async function trainStop() {
+  await api('/api/train_stop', {});
+  $('tStatus').textContent = '停止信号已发';
+}
+
+let trainTimer = null;
+async function trainPoll() {
+  if (view !== 'train') return;
+  const r = await api('/api/train_status');
+  const s = r.state;
+  const pct = s.progress.total_steps
+    ? ((s.progress.epoch-1) * s.progress.total_steps + s.progress.step)
+      / (s.progress.total_steps * (s.config.epochs||1)) * 100 : 0;
+  $('tBar').style.width = Math.min(100, pct).toFixed(1) + '%';
+  $('tProg').textContent = s.running
+    ? `epoch ${s.progress.epoch}/${s.config.epochs} · step ${s.progress.step}/${s.progress.total_steps} · ${Math.round(s.elapsed)}s`
+    : (s.error ? '出错' : (s.history.length ? '完成' : '未开始'));
+  $('tLog').textContent = s.log.join('\n') || '等待启动…';
+  $('tLog').scrollTop = $('tLog').scrollHeight;
+  const h = $('tHist');
+  h.innerHTML = '<tr><th>ep</th><th>loss</th><th>img</th><th>msg</th><th>ber</th></tr>' +
+    s.history.map(x => `<tr><td>${x.epoch}</td><td>${x.loss}</td>
+      <td>${x.loss_img}</td><td>${x.loss_msg}</td>
+      <td style="color:${x.ber<0.1?'var(--ok)':'var(--warn)'}">${x.ber}</td></tr>`).join('');
+  if (s.previews.cover) {
+    $('tPrev').innerHTML = ['cover','watermarked','attacked'].map(k =>
+      `<figure><img src="data:image/png;base64,${s.previews[k]||''}">
+       <figcaption>${k}</figcaption></figure>`).join('');
+  }
+  if (s.ckpts.length) {
+    $('tCkpt').innerHTML = `最新 ckpt: ${s.ckpts[s.ckpts.length-1]}
+      <button onclick="useCkpt('${s.ckpts[s.ckpts.length-1].replace(/'/g,"\\'")}')">
+      在流水线中使用</button>`;
+  }
+  if (s.error) { $('tStatus').textContent = s.error; $('tStatus').className='status err'; }
+}
+function useCkpt(p) {
+  refreshRuns();
+  setView('pipe');
+  setTimeout(() => {
+    $('ckpt').value = p;
+    $('pipeStatus').textContent = '已选择训练权重, 点 ▶ 运行流水线';
+    $('pipeStatus').className = 'status ok';
+  }, 200);
+}
+
+/* ================= LLM ================= */
 function setSide(x) {
   ['llm','edit'].forEach(t => {
     $('tab-'+t).className = t===x ? 'on' : '';
@@ -472,12 +689,18 @@ function setSide(x) {
 }
 function setView(v) {
   view = v;
-  $('view-pipe').className = v==='pipe' ? 'on' : '';
-  $('view-blocks').className = v==='blocks' ? 'on' : '';
-  $('ctrl-pipe').style.display = v==='pipe' ? 'flex' : 'none';
-  $('ctrl-blocks').style.display = v==='blocks' ? 'flex' : 'none';
-  if (v==='pipe') { if (!graph.nodes.length) runDemo(); }
-  else { if (!blocksSpec) loadBlocks(); else drawBlocks({}); }
+  ['pipe','blocks','train'].forEach(t => {
+    $('view-'+t).className = t===v ? 'on' : '';
+    $('ctrl-'+t) && ($('ctrl-'+t).style.display = t===v ? 'flex' : 'none');
+  });
+  $('canvas').style.display = v==='train' ? 'none' : '';
+  $('links').style.display = v==='train' ? 'none' : '';
+  $('trainPanel').style.display = v==='train' ? 'grid' : 'none';
+  if (v==='pipe') { if (!graph.nodes.length) runDemo(); refreshRuns(); }
+  else if (v==='blocks') { if (!blocksSpec) loadBlocks(); else drawBlocks({}); }
+  else { initTrainUI(); if (trainTimer) clearInterval(trainTimer);
+         trainTimer = setInterval(trainPoll, 2000); trainPoll(); }
+  if (v!=='train' && trainTimer) { clearInterval(trainTimer); trainTimer=null; }
 }
 
 async function genPrompt() {

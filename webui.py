@@ -250,6 +250,19 @@ def op_run_demo(d):
         eb, db = enc.build(), dec.build()
         trained = False
         msg_len = enc.inputs["message"][0]
+        # 加载训练产出的真权重 (可选)
+        ckpt_path = d.get("ckpt_path")
+        if ckpt_path:
+            import torch
+            import os
+            real = os.path.realpath(ckpt_path)
+            from wmflow.train import RUNS_DIR
+            if not real.startswith(os.path.realpath(RUNS_DIR)):
+                return {"ok": False, "error": "ckpt 须在 runs/ 目录下"}
+            ck = torch.load(real, map_location="cpu", weights_only=False)
+            eb.as_module().load_state_dict(ck["enc"])
+            db.as_module().load_state_dict(ck["dec"])
+            trained = True
 
         def _enc(cover, bits, s):
             import torch
@@ -339,10 +352,68 @@ def op_trace(d):
     return {"ok": True, "output": built.output_id, "thumbs": thumbs}
 
 
+# ---------------------------------------------------------------- 数据集/训练
+FS_ROOTS = ["/home/lpl2025", "/data", "/mnt", "/root"]
+
+
+def op_fs(d):
+    """服务器目录浏览: 子目录 + 图片数 (数据集选择用)。"""
+    import os
+    from wmflow.train import scan_dataset
+    path = d.get("path", "")
+    if not path:
+        return {"roots": [r for r in FS_ROOTS if os.path.isdir(r)]}
+    real = os.path.realpath(path)
+    if not any(real == r or real.startswith(r + os.sep) for r in FS_ROOTS):
+        return {"error": f"路径须在 {FS_ROOTS} 之下"}
+    if not os.path.isdir(real):
+        return {"error": f"不是目录: {real}"}
+    info = scan_dataset(real)
+    info["parent"] = os.path.dirname(real.rstrip("/")) or "/"
+    return info
+
+
+def op_train_start(d):
+    from wmflow.train import start_training, ATTACKS
+    cfg = dict(d)
+    att = [a for a in cfg.get("attacks", []) if a in ATTACKS]
+    cfg["attacks"] = att or ["combo"]
+    return {"ok": True, "result": start_training(cfg)}
+
+
+def op_train_status(_d):
+    from wmflow.train import STATE
+    return {"ok": True, "state": STATE.snapshot()}
+
+
+def op_train_stop(_d):
+    from wmflow.train import STATE
+    STATE.stop_flag = True
+    return {"ok": True, "msg": "停止信号已发"}
+
+
+def op_runs(_d):
+    """列出训练产出 ckpt (供 run_demo 加载)。"""
+    from wmflow.train import RUNS_DIR
+    import os
+    out = []
+    if os.path.isdir(RUNS_DIR):
+        for name in sorted(os.listdir(RUNS_DIR), reverse=True)[:10]:
+            rd = os.path.join(RUNS_DIR, name)
+            cks = sorted(f for f in os.listdir(rd) if f.endswith(".pt"))
+            if cks:
+                out.append({"run": name,
+                            "ckpt": os.path.join(rd, cks[-1]),
+                            "n_ckpts": len(cks)})
+    return {"runs": out}
+
+
 OPS = {
     "modules": op_modules, "recipes": op_recipes, "build": op_build,
     "swap": op_swap, "prompt": op_prompt, "apply_reply": op_apply_reply,
     "forward": op_forward, "run_demo": op_run_demo, "trace": op_trace,
+    "fs": op_fs, "train_start": op_train_start, "train_status": op_train_status,
+    "train_stop": op_train_stop, "runs": op_runs,
 }
 
 
