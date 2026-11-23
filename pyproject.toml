@@ -1,0 +1,9 @@
+[project]
+name = "wmflow"
+version = "0.1.0"
+description = "Node-graph workflow engine for watermark embed/attack/decode/eval pipelines (clean-room)"
+requires-python = ">=3.9"
+dependencies = ["numpy>=1.25", "opencv-python>=4.8"]
+
+[tool.setuptools]
+packages = ["wmflow"]

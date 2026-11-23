@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "name": "smoke_ablation",
+    "description": "冒烟图: LSB玩具嵌入 → 攻击链 → 提取 → BER/画像 → 报告。换臂只改 layer/preset widget。",
+    "version": 0.1
+  },
+  "nodes": {
+    "1": {"class_type": "CoverLoader", "inputs": {"path": "demo/cover.png"}},
+    "2": {"class_type": "MessageGen", "inputs": {"length": 64, "seed": 20261123}},
+    "3": {"class_type": "WMModelLoader", "inputs": {"framework": "lsb_toy", "weights_path": "", "msg_len": 64}},
+    "4": {"class_type": "Embed", "inputs": {"model": ["3", 0], "cover": ["1", 0], "message": ["2", 0], "strength": 1.0}},
+    "5": {"class_type": "NoiseLayer", "inputs": {"image": ["4", 0], "layer": "combo_builtin", "seed": 7}},
+    "6": {"class_type": "TranscodeChain", "inputs": {"image": ["5", 0], "preset": "wechat_lite"}},
+    "7": {"class_type": "Decode", "inputs": {"model": ["3", 0], "image": ["6", 0]}},
+    "8": {"class_type": "BERCompare", "inputs": {"ref": ["2", 0], "dec": ["7", 0]}},
+    "9": {"class_type": "ImageProfile", "inputs": {"image": ["6", 0], "ref": ["1", 0]}},
+    "10": {"class_type": "SaveReport", "inputs": {"out_dir": "out/smoke", "metrics_json": "{}"}}
+  },
+  "outputs": ["8", "9", "10"]
+}
