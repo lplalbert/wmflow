@@ -155,8 +155,18 @@ def apply_attacks(x, attacks: List[str], rng: np.random.Generator):
 IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
 
 
+def _count_images(path: str) -> int:
+    n = 0
+    for _root, _dirs, files in os.walk(path):
+        n += sum(1 for f in files
+                 if os.path.splitext(f)[1].lower() in IMG_EXTS)
+        if n > 20000:
+            break
+    return n
+
+
 def scan_dataset(path: str):
-    """目录里的图片数与子目录图片数 (一层, 不递归)。"""
+    """目录里的图片数 (递归) 与子目录 (一层, 含各自递归图片数)。"""
     out = {"path": path, "dirs": []}
     try:
         entries = sorted(os.scandir(path), key=lambda e: e.name)
@@ -165,12 +175,11 @@ def scan_dataset(path: str):
     n_here = 0
     for e in entries:
         if e.is_dir():
-            n = sum(1 for f in os.scandir(e.path)
-                    if f.is_file() and os.path.splitext(f.name)[1].lower() in IMG_EXTS)
-            out["dirs"].append({"name": e.name, "path": e.path, "n_images": n})
+            out["dirs"].append({"name": e.name, "path": e.path,
+                                "n_images": _count_images(e.path)})
         elif e.is_file() and os.path.splitext(e.name)[1].lower() in IMG_EXTS:
             n_here += 1
-    out["n_images"] = n_here
+    out["n_images"] = n_here or _count_images(path)
     return out
 
 
@@ -179,7 +188,13 @@ def load_dataset(path: str, n: int, size: int, seed: int):
     files = sorted(f for f in glob.glob(os.path.join(path, "*"))
                    if os.path.splitext(f)[1].lower() in IMG_EXTS)
     if not files:
-        raise ValueError(f"目录无图片: {path}")
+        # 递归回退 (如 DIV2K/DIV2K_train/*.png 两级结构)
+        for _root, _dirs, fs in os.walk(path):
+            files.extend(os.path.join(_root, f) for f in fs
+                         if os.path.splitext(f)[1].lower() in IMG_EXTS)
+        files = sorted(files)
+    if not files:
+        raise ValueError(f"目录无图片 (含子目录): {path}")
     rng = np.random.default_rng(seed)
     if n and n < len(files):
         idx = rng.choice(len(files), n, replace=False)
