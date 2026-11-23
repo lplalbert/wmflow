@@ -1,0 +1,124 @@
+# wmflow 交接简报（2026-11-23，供新会话接手）
+
+> 一句话定位：**水印嵌入/攻击/提取/评测的节点图工作流引擎**——ComfyUI 工作流模式的
+> clean-room 化（借模式不抄码，避 GPL-3.0），支持搭积木式网络组装、服务器训练、LLM 辅助调参。
+> 设计依据：论文调研仓 `ComfyUI工作流模式调研_水印节点化设计_20261123.md`。
+
+## 1. 资产地图
+
+| 东西 | 位置 |
+|---|---|
+| 代码仓（远端） | `github.com/lplalbert/wmflow`（Public，main） |
+| 服务器工作副本 | `lpl2025@222.20.98.60:/home/lpl2025/lpl/wmflow`（**主要开发地**） |
+| 本地镜像 | `c:/Users/24976/Desktop/code/wmflow` |
+| webui 服务 | `http://222.20.98.60:7860`（无鉴权，**勿映射公网**） |
+| 训练产出 | 仓库下 `runs/<框架>_<时间戳>/ckpt_epN.pt` |
+| 服务器数据集 | `/home/lpl2025/lpl/Datasets/`（DIV2K 900 图、document_ds 30000 图） |
+| 流水账 | 论文调研仓 `handoff/status.md`（wmflow 各条目，最新在下） |
+
+## 2. 架构速览（文件地图）
+
+```
+wmflow/
+  engine.py        # clean-room 执行器: API 格式 JSON 图/拓扑+环检测/类型检查/
+                   # 输入签名缓存(张量走 bytes 摘要)/种子记账/report.json
+  node.py          # 节点契约 (INPUT_TYPES/RETURN_TYPES + VALIDATE_INPUTS/fingerprint)
+  registry.py      # NODE_CLASS_MAPPINGS + /object_info 式自省
+  types.py         # IMAGE/MESSAGE/WM_MODEL/TENSOR/METRICS... + Message/WMModel
+  modules.py       # 13 个模块级积木 (conv/res/se/dense/down/up/msg_map/concat/
+                   # residual_add/bit_head/adapter1x1...)——层不外露只显示层组成串
+  netspec.py       # NetSpec: 搭积木 JSON/自动适配(通道继承/插 adapter/参数注入)/
+                   # LLM prompt 渲染/apply_patch 补丁闭环/forward_trace 逐块追踪
+  components.py    # 自动切段器(积木段=组件) + 组装器(悬空引用回落上一块)
+  recipes.py       # hidden/stegastamp/mbrs/videoseal 四配方 (模块级结构对照口径,
+                   # 训练侧攻击记 train_note 不进推理积木)
+  llm.py           # debug/tune prompt + 模型回复 JSON 补丁解析 + 可选 API 钩子
+                   # (凭据只走 WMFLOW_LLM_BASE_URL/API_KEY/MODEL 环境变量)
+  train.py         # 训练环: 可微攻击(gaussian_noise/blur/jpeg_approx(DCT+STE)/
+                   # crop_resize/dropout/combo) + BCE/MSE 加权 + epoch BER + ckpt
+  nodes_core.py / nodes_models.py / nodes_netspec.py   # 14 个图节点
+  webui.py         # 零依赖 http.server 的 web 服务 (15 个 /api/*)
+webui_index.html   # 单页前端: 节点图画布(SVG 贝塞尔连线/类型彩色端口/节点内嵌
+                   # 图像·比特格·热图·指标预览) 三视图: 流水线/积木链(组件库+组装台)/训练
+prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
+scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
+tests/             # test_smoke(7)/test_netspec(9)/test_components(3) 三套
+workflows/         # 示例图 JSON
+```
+
+## 3. 已完成（按时间序）
+
+1. **ComfyUI 调研** → 设计文档（工作区根，含 15 条可借鉴清单、GPL 红线、
+   "层→模块→网络"粒度约定、LLM prompt 设计、训练不进图裁决）。
+2. **P0 引擎**：14 节点 + 执行器 + 双端冒烟全过。
+3. **P1-1 积木系统**：13 积木 + NetSpec（自动适配）+ 四经典框架配方 + LLM prompt
+   三模式 + 补丁闭环。
+4. **webui v1→v2**：网页工作台，ComfyUI 式节点图，输入输出直视（图像 PNG/比特格
+   错位标红/特征图热图/指标 KV），上传载体图，服务器 GPU 真跑。
+5. **训练能力**：训练面板（服务器路径浏览含递归计数/图片数量/尺寸/噪声多选/
+   epochs·batch·lr·strength·损失权重），后台训练+进度+loss/BER 表+逐 epoch 预览+
+   ckpt 一键回灌流水线。**服务器 GPU 实测通过**（DIV2K×stegastamp×RTX 3090）。
+6. **组件库+组装台**（最新）：按框架分组的积木段货架（每框架 enc 7 段/dec 3 段 +
+   13 自由单积木），拣段→排序→构建校验→追踪→作 enc/dec 跑流水线；跨框架混段
+   实测通过（hidden.fusion + videoseal.res + hidden.out）。
+
+## 4. 操作手册
+
+```bash
+# 服务 (服务器上)
+cd /home/lpl2025/lpl/wmflow
+export WMFLOW_PY=/data/miniconda_dir/envs/lpl/bin/python
+bash scripts/webui.sh start|stop|restart|status 7860
+
+# 部署流 (改完代码)
+# 本地: git add -A && git commit && git push origin main
+# 服务器: git fetch origin && git merge --ff-only origin/main
+#         bash scripts/webui.sh restart 7860   # fetch 与 merge 分开跑!
+
+# 测试
+python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_components.py
+```
+
+- **服务器 git 已配 HTTPS fetch + SSH push**（deploy key
+  `~/.ssh/id_ed25519_github_wmflow`）——SSH fetch 会挂起，勿改回。
+- 训练用法：webui「训练」页签选数据集目录（可逐级浏览）→ 勾噪声层 → 参数 →
+  开始训练；ckpt 自动落 runs/，训练完点「在流水线中使用」。
+- LLM 闭环：右栏生成 prompt → 贴给任意大模型 → 回复贴回「贴回复·套补丁」。
+
+## 5. 已知坑（合集，改代码前先看）
+
+1. **NetSpec 补丁回显双源**：`__init__` 里 modules 与 spec 必须同源（deepcopy 后取），
+   否则补丁改了不回显——已有回归断言守着。
+2. **`type("M",(),{...})()` 类字典挂函数 = 绑定方法吃 self**——临时对象传 callable
+   用实例属性。
+3. **pkill/pgrep 自匹配**会杀掉 ssh 会话/自己——用 pidfile（scripts/webui.sh）或
+   `pgrep -x` 精确名。
+4. **git fetch 与 merge 同条 ssh 命令竞态**（merge 先报"已最新"）——分开跑。
+5. **DIV2K 类两级目录**要递归扫图（load/scan 已做递归回退）。
+6. **跨框架混搭消息长不齐**（30↔256bit）：dec bit_head 自动对齐 enc + BER 短边
+   防御比较，缺一 numpy 广播就炸。
+7. **residual_add 形状**取 cover 形（x+cover 广播）；切段后其跨段 from 悬空 →
+   组装器"回落上一块"语义。
+8. **中文文件写入**一律 Write 工具或 Python `open(encoding='utf-8')` + 事后数 `?`
+   核验，勿走 shell 管道（GBK 坑）。
+9. Windows GBK 控制台打不出 `²` 等字符会炸 print——测试文案用 ASCII。
+10. webui **无鉴权**，别把 7860 映射公网；要公网先加 token。
+
+## 6. 未完成 / 下一步（按优先级候选）
+
+- 组装结果**保存为自定义配方**/导出 JSON（现在只能跑）
+- 组装/混搭模型进**训练**面板（现只单配方训练）
+- 四配方**真训练权重**（现在都是 untrained 结构演示，lsb_toy 才是真嵌入）
+- 损失曲线图、多 run 对比、val 集划分
+- scw 物理层（pimog/esmn，numpy 不可微）进训练的 **STE 直通方案**待设计
+- 服务守护化（systemd）；段级 trace 缩略图；画布拖拽/缩放
+- LICENSE 选型（建议 MIT，未放文件）；**旧 fine-grained PAT 应吊销**（曾明文出现在
+  对话里，用户已知）
+
+## 7. 口径纪律（论文相关，勿破）
+
+- 四配方 = **模块级结构对照**，不称官方等价复现（层宽/深度差异在 recipes.py 注明）
+- 训练侧攻击（HiDDeN Denoiser/MBRS 真 JPEG mini-batch 等）记 train_note 不进推理积木
+- 引擎 clean-room，不抄 ComfyUI 代码（GPL-3.0）
+- scw_research（论文线代码）经 PYTHONPATH 适配，不复制进本仓；E2 预注册口径以
+  论文调研仓为准，wmflow 是工程组织层不动科学路线
