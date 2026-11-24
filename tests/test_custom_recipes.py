@@ -173,17 +173,46 @@ def test_size_mismatch_rejected():
         print("[ok] size mismatch rejected: 128x128 enc + 64x64 dec -> refused, no file")
 
 
+def test_enc_in_out_size_mismatch():
+    """encoder 输入 128 但输出 32 的怪结构也要拒 (流水线要把输出加回同尺寸载体)。"""
+    with temp_store():
+        weird = {"name": "weird",
+                 "input": {"image": [3, 128, 128], "message": [30]},
+                 "modules": [
+                     {"id": "mm", "type": "msg_map", "params": {"out_ch": 1},
+                      "from": ["message"]},
+                     {"id": "cat", "type": "concat", "from": ["image", "mm"]},
+                     {"id": "d1", "type": "conv_block",
+                      "params": {"out_ch": 32, "stride": 2}},
+                     {"id": "d2", "type": "conv_block",
+                      "params": {"out_ch": 3, "stride": 2}},
+                 ], "output": "d2"}
+        dec32 = {"name": "dec32", "input": {"image": [3, 32, 32]},
+                 "modules": [
+                     {"id": "d1", "type": "conv_block", "params": {"out_ch": 32}},
+                     {"id": "hd", "type": "bit_head", "params": {"msg_len": 30}},
+                 ], "output": "hd"}
+        try:
+            crec.save("weird", weird, dec32)
+            raise AssertionError("encoder 输入/输出尺寸不一致应被拒绝")
+        except ValueError as e:
+            assert "与输入" in str(e), e
+        print("[ok] enc in/out size mismatch rejected (128 in -> 32 out)")
+
+
 def test_meta_cannot_override_derived():
     """meta 不许覆盖已校验的 msg_len/size/out_shape。"""
     with temp_store():
         enc, dec, _ = RECIPES["hidden"]()
         s = crec.save("metaover", enc.spec, dec.spec,
-                      meta={"msg_len": 999, "size": 32, "note": "keep"})
+                      meta={"msg_len": 999, "size": 32, "note": "keep",
+                            "msg_len_aligned": True})
         assert s["msg_len"] == 30 and s["size"] == 128, s
         rec = crec.get("metaover")
         assert rec["meta"]["msg_len"] == 30 and rec["meta"]["size"] == 128
         assert rec["meta"]["note"] == "keep"
-        print("[ok] meta cannot override derived: msg_len/size kept, note kept")
+        assert "msg_len_aligned" not in rec["meta"], "未真对齐时不许伪造对齐标记"
+        print("[ok] meta cannot override derived: msg_len/size kept, aligned flag not forged")
 
 
 def test_concurrent_same_name():
@@ -305,6 +334,7 @@ if __name__ == "__main__":
     test_export_import_roundtrip()
     test_validation_rejects_bad()
     test_size_mismatch_rejected()
+    test_enc_in_out_size_mismatch()
     test_meta_cannot_override_derived()
     test_concurrent_same_name()
     test_reserved_and_symlink()

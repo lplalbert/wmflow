@@ -141,28 +141,34 @@ def _validate(enc_spec: Dict[str, Any],
     out = tuple(eb.out_shape)
     if len(out) != 3 or out[0] != 3:
         raise ValueError(f"encoder 输出应为 (3,H,W), 实得 {out}")
-    # 关键: encoder 输出尺寸必须与 decoder 声明接收的尺寸一致 (否则存进去也串不起来)
+    # 关键: 流水线要把嵌入器输出与载体做残差相加, 所以输入/输出/解码输入三者尺寸必须全等
+    if out != ein:
+        raise ValueError(f"encoder 输出 {out} 与输入 {ein} 尺寸不一致 "
+                         f"(流水线要把输出加回同尺寸载体)")
     if out != din:
         raise ValueError(f"encoder 输出 {out} 与 decoder 输入 {din} 尺寸不一致")
     if tuple(db.out_shape) != (msg_len,):
         raise ValueError(f"decoder 输出 {tuple(db.out_shape)} 与消息长 {msg_len} 不一致")
 
-    # 真跑一次 enc→dec: 抓 build 查不出的运行期不兼容 (通道/广播/算子)
+    # 真跑一次 enc→dec: 抓 build 查不出的运行期不兼容 (通道/广播/算子)。
+    # 用 eval 模式 + 限制尺寸, 避免 BN 单样本统计与超大图拖慢存盘。
     forward_checked = False
     try:
         import torch
     except ImportError:
         torch = None
-    if torch is not None:
-        _, H, W = out
+    _, H, W = out
+    if torch is not None and H * W <= 512 * 512:
         try:
+            enc_mod = eb.as_module().eval()
+            dec_mod = db.as_module().eval()
             with torch.no_grad():
                 x = torch.rand(1, 3, H, W)
                 m = (torch.rand(1, msg_len) > 0.5).float()
-                y = eb.forward({"image": x, "message": m})
+                y = enc_mod({"image": x, "message": m})
                 if tuple(y.shape) != (1, *out):
                     raise ValueError(f"encoder 实跑输出 {tuple(y.shape)} ≠ (1,{out})")
-                z = db.forward({"image": y})
+                z = dec_mod({"image": y})
             if tuple(z.shape) != (1, msg_len):
                 raise ValueError(f"前向输出 {tuple(z.shape)} ≠ (1,{msg_len})")
             forward_checked = True
@@ -193,7 +199,7 @@ def _summary(rec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
-_DERIVED = ("msg_len", "size", "out_shape", "forward_checked")
+_DERIVED = ("msg_len", "size", "out_shape", "forward_checked", "msg_len_aligned")
 
 
 def save(name: str, encoder: Dict[str, Any], decoder: Dict[str, Any], *,
@@ -202,6 +208,8 @@ def save(name: str, encoder: Dict[str, Any], decoder: Dict[str, Any], *,
          meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """存一条自定义配方 (先对齐 decoder 消息长, 再硬校验, 最后原子写盘)。"""
     p = _path(name)                          # 先把名字/路径问题挡掉
+    if p.exists() and not overwrite:         # 廉价预检: 重名不覆盖就别白跑前向
+        raise FileExistsError(f"配方 '{p.stem}' 已存在 (勾选覆盖才重写)")
     dec_fixed, aligned = align_decoder(encoder, decoder)
     enc, dec, info = _validate(encoder, dec_fixed)
     with _lock_for(p.stem):                  # 存在检查与写入同一临界区

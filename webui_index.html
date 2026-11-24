@@ -205,12 +205,12 @@
 
 <!-- ============ 积木链控制 ============ -->
 <div class="ctrl" id="ctrl-blocks" style="display:none">
-  <label>模式 <select id="benchMode">
+  <label>模式 <select id="benchMode" onchange="benchInvalidate()">
     <option value="encoder">encoder (image+msg → 水印图)</option>
     <option value="decoder">decoder (image → logits)</option>
   </select></label>
-  <label>msg_len <input id="benchMsgLen" type="number" value="30" style="width:60px"></label>
-  <label>size <input id="benchSize" type="number" value="128" step="32" style="width:64px"></label>
+  <label>msg_len <input id="benchMsgLen" type="number" value="30" style="width:60px" onchange="benchInvalidate()"></label>
+  <label>size <input id="benchSize" type="number" value="128" step="32" style="width:64px" onchange="benchInvalidate()"></label>
   <button class="primary" onclick="buildBench()">🔧 构建校验</button>
   <button onclick="runTrace()">▶ 逐积木追踪</button>
   <button onclick="benchClear()">清空组装台</button>
@@ -623,6 +623,11 @@ function delSeg(i) {
   benchSide = {};
   renderBenchStrip();
 }
+function benchInvalidate() {          // 模式/消息长/尺寸一改, 已构建的 spec 就作废
+  benchSide = {};
+  const st = $('blockStatus');
+  if (st) { st.textContent = '参数已改, 请重新构建校验'; st.className = 'status'; }
+}
 function benchClear() {
   benchSegs = []; benchSide = {}; blocksSpec = null;
   renderBenchStrip(); drawBlocks({});
@@ -831,10 +836,11 @@ async function loadCustomSide(side, name) {
   $('benchSize').value = spec.input.image[1];
   if (isEnc) $('benchMsgLen').value = spec.input.message[0];
   blocksSpec = spec;
+  benchSide = {};                       // 整台被这条配方替换, 只有载入的这侧算数
   benchSide[part] = spec;
   benchSegs = JSON.parse(JSON.stringify((r.segments || {})[part] || []));
   renderBenchStrip(); drawBlocks({});
-  st.innerHTML = `✓ 已载入「${r.recipe.title}」的 <b>${part}</b> 侧 (段已拆回组装台, 可继续拣段/追踪)`;
+  st.innerHTML = `✓ 已载入「${esc(r.recipe.title)}」的 <b>${part}</b> 侧 (段已拆回组装台, 可继续拣段/追踪)`;
   st.className = 'status ok';
 }
 function useCustomPipe(name) {
@@ -904,7 +910,7 @@ async function exportCustom(name) {
   if (!r.ok) { alert(r.error); return; }
   window.__exportJson = r.json; window.__exportName = r.filename;
   openDlg('导出配方: ' + name, `
-    <div class="caption">文件 ${r.filename} — 可复制存档, 或整段贴到别处「导入 JSON」</div>
+    <div class="caption">文件 ${esc(r.filename)} — 可复制存档, 或整段贴到别处「导入 JSON」</div>
     <textarea id="expJson" rows="18" readonly></textarea>
     <div class="row"><button onclick="copyExport()">复制</button>
       <button onclick="downloadExport()">下载 .json</button></div>`, null);
@@ -1092,7 +1098,9 @@ async function applyReply() {
     {spec: blocksSpec, reply: $('reply').value});
   const s = $('replyStatus');
   if (!r.ok) { s.textContent = '失败: '+r.error; s.className='status err'; return; }
-  blocksSpec = r.spec; drawBlocks({});
+  blocksSpec = r.spec;
+  benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;  // 套补丁后同步
+  drawBlocks({});
   s.textContent = '✓ 补丁已套用'; s.className='status ok';
   $('prompt').value = r.prompt;
 }
