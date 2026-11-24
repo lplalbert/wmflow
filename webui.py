@@ -229,131 +229,142 @@ def _demo_cover(size, upload_b64=None):
     return np.clip(img, 0, 1).astype(np.float32)
 
 
-def op_run_demo(d):
-    """全流程真跑: 载体→嵌入→攻击→提取, 逐节点输出可视化 + 指标。"""
+def _resolve_demo_model(d):
+    """解析演示用模型: ckpt 结构快照 > 显式混搭 spec > 自定义配方 > 内置配方。
+
+    返回 dict: encode/decode/msg_len/size/status/note。
+    - ckpt 里存着训练时的 spec_enc/spec_dec (结构快照), 只要没给显式混搭 spec 就用它,
+      因此配方被删除/改写后旧 ckpt 仍按原结构回放。
+    - status: 'trained' (已载入 ckpt 权重) / 'untrained' (随机初始化, 仅演示结构)。
+    """
     import numpy as np
-    d = dict(d)
-    explicit_mix = bool(d.get("enc_spec"))   # 调用方显式给了组装 spec (混搭), 优先于 ckpt 快照
-    # 自定义配方归一: 支持 framework='custom:<名>' 与 custom_recipe='<名>' 两种写法
-    if not d.get("custom_recipe"):
-        fw0 = str(d.get("framework") or "")
-        if fw0.startswith("custom:"):
-            d["custom_recipe"] = fw0.split(":", 1)[1]
-    if d.get("custom_recipe"):
-        try:
-            enc_c, dec_c, _mc = crec.pair(d["custom_recipe"])
-        except Exception as e:
-            return {"ok": False, "error": f"自定义配方加载失败: {e}"}
-        d["enc_spec"], d["dec_spec"] = enc_c.spec, dec_c.spec
-        d["framework"] = "custom"
-        d.pop("custom_recipe", None)
-    framework = d.get("framework", "hidden")
-    size = int(d.get("size", 128))
-    if d.get("enc_spec"):
-        size = int(d["enc_spec"]["input"]["image"][1])  # 以组装网络的输入尺寸为准
-    strength = float(d.get("strength", 1.0))
-    seed = int(d.get("seed", 0))
-    layer = d.get("layer", "none")
-    preset = d.get("preset", "none")
-    structure_note = None
-    # 预读 ckpt: 训练产出绑定结构快照, 先读出来才能定尺寸 (必须在造载体之前)
+    explicit_mix = bool(d.get("enc_spec"))
+    fw = str(d.get("framework") or "hidden")
+    recipe_name = d.get("custom_recipe")
+    if not recipe_name and fw.startswith("custom:"):
+        recipe_name = fw.split(":", 1)[1]
+
     ck = None
+    note = None
     ckpt_path = d.get("ckpt_path")
-    if ckpt_path and not (framework == "lsb_toy" and not explicit_mix):
+    if ckpt_path:
         import os
         import torch
         real = os.path.realpath(ckpt_path)
         from wmflow.train import RUNS_DIR
         if not real.startswith(os.path.realpath(RUNS_DIR)):
-            return {"ok": False, "error": "ckpt 须在 runs/ 目录下"}
+            raise ValueError("ckpt 须在 runs/ 目录下")
         try:
             ck = torch.load(real, map_location="cpu", weights_only=False)
         except Exception as e:
-            return {"ok": False, "error": f"ckpt 读取失败: {e}"}
-        if not explicit_mix:
-            size = int(ck.get("size")
-                       or NetSpec(ck["spec_enc"]).inputs["image"][1])
+            raise ValueError(f"ckpt 读取失败: {e}")
 
-    cover = _demo_cover(size, d.get("cover_upload"))
-    # 模型: lsb_toy 真嵌入; 配方/自定义组装用随机权重演示结构 (标注 untrained)
-    if framework == "lsb_toy" and not d.get("enc_spec"):
-        from wmflow.nodes_models import make_lsb_toy
-        msg_len = int(d.get("msg_len", 64))
-        model = make_lsb_toy(msg_len)
-        trained = True
+    if ck is not None and not explicit_mix:
+        # 结构快照优先: 配方文件在不在都不影响回放
+        enc, dec = NetSpec(ck["spec_enc"]), NetSpec(ck["spec_dec"])
+        size = int(ck.get("size") or enc.inputs["image"][1])
+        src = ck.get("recipe") or ck.get("framework") or "ckpt"
+        if recipe_name:
+            try:
+                cur_e, cur_d, _m = crec.pair(recipe_name)
+                same = (cur_e.spec.get("modules") == ck["spec_enc"].get("modules")
+                        and cur_d.spec.get("modules") == ck["spec_dec"].get("modules"))
+                if not same:
+                    note = (f"配方 {recipe_name} 的结构已被改动, "
+                            f"实际按 ckpt 训练时的结构快照渲染")
+            except Exception:
+                note = f"配方 {recipe_name} 已不存在, 按 ckpt 的结构快照渲染"
+        elif fw not in ("custom", "lsb_toy", src):
+            note = (f"已按 ckpt 结构快照 ({src} {size}²/"
+                    f"{ck.get('msg_len')}bit) 渲染, 忽略所选框架 {fw}")
     else:
-        structure_note = None
-        if ck is not None and not explicit_mix:
-            enc = NetSpec(ck["spec_enc"])
-            dec = NetSpec(ck["spec_dec"])
-            meta = {"framework": ck.get("recipe") or ck.get("framework", "ckpt")}
-            picked = d.get("framework")
-            if picked and picked not in (meta["framework"], "custom"):
-                structure_note = (f"已按 ckpt 的结构快照渲染 ({meta['framework']} "
-                                  f"{ck.get('size')}²/{ck.get('msg_len')}bit), "
-                                  f"忽略所选框架 {picked}")
-        elif d.get("enc_spec"):
-            # 自定义组装: enc_spec/dec_spec 可来自不同配方 (跨框架混搭)
-            enc = NetSpec(d["enc_spec"])
-            dec = NetSpec(d["dec_spec"])
-            meta = {"framework": f"mix:{enc.name}+{dec.name}"}
-            # 自动适配: dec 的 bit_head 消息长对齐 enc (如 hidden 30bit ↔ videoseal 256bit)
+        size = int(d.get("size", 128))
+        if explicit_mix:
+            enc, dec = NetSpec(d["enc_spec"]), NetSpec(d["dec_spec"])
+            size = int(d["enc_spec"]["input"]["image"][1])
+            # dec 的 bit_head 消息长对齐 enc (跨框架混搭 30bit <-> 256bit)
             want = enc.inputs["message"][0]
             heads = [{"id": m["id"], "params": {"msg_len": want}}
                      for m in dec.modules if m["type"] == "bit_head"]
             if heads and dec.modules[-1].get("params", {}).get("msg_len") != want:
                 dec = dec.apply_patch(heads)
-                meta["msg_len_aligned"] = want
+        elif recipe_name:
+            enc, dec, _meta = crec.pair(recipe_name)
         else:
-            if framework not in RECIPES:
-                return {"ok": False,
-                        "error": f"未知框架 '{framework}' (内置: {sorted(RECIPES)}, "
-                                 f"或自定义配方用 custom:<名>)"}
-            enc, dec, meta = RECIPES[framework]()
+            if fw not in RECIPES:
+                raise ValueError(f"未知框架 '{fw}' (内置: {sorted(RECIPES)}, "
+                                 f"或自定义配方用 custom:<名>)")
+            enc, dec, _meta = RECIPES[fw]()
 
-        eb, db = enc.build(), dec.build()
-        msg_len = enc.inputs["message"][0]
-        enc_mod, dec_mod = eb.as_module(), db.as_module()   # 只建一次, 权重就落这个实例
-        enc_mod.eval()
-        dec_mod.eval()
-        trained = False
-        if ck is not None:
-            try:
-                enc_mod.load_state_dict(ck["enc"])
-                dec_mod.load_state_dict(ck["dec"])
-            except Exception as e:
-                return {"ok": False,
-                        "error": f"ckpt 与当前结构不匹配 (权重无法载入): {e}"}
-            trained = True
+    eb, db = enc.build(), dec.build()
+    msg_len = int(enc.inputs["message"][0])
+    enc_mod, dec_mod = eb.as_module(), db.as_module()   # 只建一次, 权重就落这个实例
+    enc_mod.eval()
+    dec_mod.eval()
+    status = "untrained"
+    if ck is not None:
+        try:
+            enc_mod.load_state_dict(ck["enc"])
+            dec_mod.load_state_dict(ck["dec"])
+        except Exception as e:
+            raise ValueError(f"ckpt 与当前结构不匹配 (权重无法载入): {e}")
+        status = "trained"
 
-        def _enc(cover, bits, s):
-            import torch
-            x = torch.from_numpy(np.ascontiguousarray(
-                cover.transpose(2, 0, 1)))[None].float()
-            m = torch.from_numpy(bits.astype(np.float32))[None]
-            with torch.no_grad():
-                y = enc_mod({"image": x, "message": m})[0]
-            out = y.permute(1, 2, 0).cpu().numpy()
-            return (1 - s) * cover + s * np.clip(out, 0, 1)
+    def encode(cover, bits, s):
+        import torch
+        x = torch.from_numpy(np.ascontiguousarray(
+            cover.transpose(2, 0, 1)))[None].float()
+        m = torch.from_numpy(np.asarray(bits, dtype=np.float32))[None]
+        with torch.no_grad():
+            y = enc_mod({"image": x, "message": m})[0]
+        out = y.permute(1, 2, 0).cpu().numpy()
+        return (1 - s) * cover + s * np.clip(out, 0, 1)
 
-        def _dec(img):
-            import torch
-            x = torch.from_numpy(np.ascontiguousarray(
-                img.transpose(2, 0, 1)))[None].float()
-            with torch.no_grad():
-                logit = dec_mod({"image": x})[0]
-            return (logit > 0.5).cpu().numpy().astype(np.uint8)
+    def decode(img):
+        import torch
+        x = torch.from_numpy(np.ascontiguousarray(
+            img.transpose(2, 0, 1)))[None].float()
+        with torch.no_grad():
+            logit = dec_mod({"image": x})[0]
+        # bit_head 出的是 logits (Linear 无激活), BCEWithLogits 的判决边界是 0
+        return (logit > 0).cpu().numpy().astype(np.uint8)
 
-        class _M:
-            pass
-        model = _M()
-        model.encode_fn = _enc      # 实例属性, 不用类字典 (会变绑定方法吃掉 self)
-        model.decode_fn = _dec
-        model.msg_len = msg_len
+    return {"encode": encode, "decode": decode, "msg_len": msg_len,
+            "size": size, "status": status, "note": note}
 
+
+def op_run_demo(d):
+    """全流程真跑: 载体→嵌入→攻击→提取, 逐节点输出可视化 + 指标。"""
+    import numpy as np
+    d = dict(d)
+    fw = str(d.get("framework") or "hidden")
+    explicit_mix = bool(d.get("enc_spec"))
+    if fw == "lsb_toy" and not explicit_mix and not d.get("ckpt_path"):
+        from wmflow.nodes_models import make_lsb_toy
+        size = int(d.get("size", 128))
+        msg_len = int(d.get("msg_len", 64))
+        toy = make_lsb_toy(msg_len)
+        encode, decode = toy.encode_fn, toy.decode_fn
+        status = "algorithmic"
+        note = "LSB 玩具嵌入 (确定性算法, 非训练权重)"
+    else:
+        try:
+            m = _resolve_demo_model(d)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
+        encode, decode = m["encode"], m["decode"]
+        msg_len, size, status, note = (m["msg_len"], m["size"],
+                                       m["status"], m["note"])
+
+    strength = float(d.get("strength", 1.0))
+    seed = int(d.get("seed", 0))
+    layer = d.get("layer", "none")
+    preset = d.get("preset", "none")
+
+    cover = _demo_cover(size, d.get("cover_upload"))
     rng = np.random.default_rng(seed)
     bits = rng.integers(0, 2, size=msg_len).astype(np.uint8)
-    embedded = model.encode_fn(cover, bits, strength)
+    embedded = encode(cover, bits, strength)
     attacked = embedded.copy()
     attack_params = {}
     if layer not in ("", "none"):
@@ -364,15 +375,15 @@ def op_run_demo(d):
         from wmflow.nodes_core import TranscodeChain
         attacked, p2 = TranscodeChain().execute(attacked, preset)
         attack_params.update(p2)
-    dec_bits = model.decode_fn(attacked)
+    dec_bits = decode(attacked)
     L = min(len(dec_bits), len(bits))   # 防御: 组装头长不齐时按短边比较
     errs = int(np.sum(dec_bits[:L] != bits[:L]))
     mse = float(np.mean((embedded - cover) ** 2))
     mse_a = float(np.mean((attacked - cover) ** 2))
 
     return {
-        "ok": True, "trained": trained, "msg_len": msg_len,
-        "structure_note": structure_note,
+        "ok": True, "trained": status == "trained", "model_status": status,
+        "msg_len": msg_len, "structure_note": note,
         "attack_params": attack_params,
         "nodes": {
             "cover": {"kind": "image", "png": _png_b64(cover)},

@@ -471,6 +471,9 @@ function pvThumb(t) {
 function pipeGraph(d) {
   const N = d.nodes;
   const g = {nodes:[], links:[]};
+  // 状态徽标: trained=载入训练权重 / LSB=确定性算法嵌入 / untrained=随机权重仅演示结构
+  const st = d.model_status || (d.trained ? 'trained' : 'untrained');
+  const badge = st === 'trained' ? 'trained' : (st === 'algorithmic' ? 'LSB 算法' : 'untrained');
   const col = i => 40 + i*300;
   g.nodes.push({id:'cover', x:col(0), y:40, title:'Cover 载体输入',
     tint:'IMAGE', badge:'INPUT',
@@ -479,7 +482,7 @@ function pipeGraph(d) {
     tint:'MESSAGE', badge:'INPUT',
     outputs:[{name:'bits', type:'MESSAGE'}], preview:pvBits(N.message.bits)});
   g.nodes.push({id:'embed', x:col(1), y:40, title:'Embed 嵌入',
-    tint:'IMAGE', badge:d.trained?'trained':'untrained',
+    tint:'IMAGE', badge,
     inputs:[{name:'cover', type:'IMAGE'},{name:'msg', type:'MESSAGE'}],
     outputs:[{name:'image', type:'IMAGE'}],
     preview:pvImage(N.embedded.png, `PSNR ${N.embedded.psnr} dB vs 载体`)});
@@ -491,7 +494,7 @@ function pipeGraph(d) {
     caption: Object.keys(d.attack_params||{}).length
       ? JSON.stringify(d.attack_params) : 'layer=none, preset=none'});
   g.nodes.push({id:'dec', x:col(3), y:40, title:'Decode 提取',
-    tint:'MESSAGE', badge:d.trained?'trained':'untrained',
+    tint:'MESSAGE', badge,
     inputs:[{name:'image', type:'IMAGE'}],
     outputs:[{name:'bits', type:'MESSAGE'}],
     preview:pvBits(N.decoded.bits, N.decoded.ref)});
@@ -536,11 +539,13 @@ async function runDemo() {
   }
   graph = pipeGraph(d);
   renderGraph();
+  const mst = d.model_status || (d.trained ? 'trained' : 'untrained');
   $('pipeStatus').innerHTML = `✓ 完成 · BER <b>${d.nodes.metrics.ber}</b>` +
+    (mst === 'trained' ? ' · <b>已训练权重</b>' : '') +
     (mixSpec ? ` · <b>${mixSpec.label}</b> (混搭)` : '') +
     (isCustom ? ` · <b>${esc(fwv.slice(7))}</b> (我的配方)` : '') +
     (d.structure_note ? ` · <span style="color:var(--warn)">${esc(d.structure_note)}</span>` : '') +
-    (d.trained ? '' : ' · <span style="color:var(--warn)">结构演示 (随机权重)</span>');
+    (mst === 'untrained' ? ' · <span style="color:var(--warn)">结构演示 (随机权重)</span>' : '');
   $('pipeStatus').className = 'status ok';
 }
 

@@ -266,7 +266,7 @@ class NetSpec:
         L.append("## 6. 约定与已知约束")
         L.append("- 图像张量 (B,C,H,W) float32 [0,1]; 消息 (B,msg_len) {0,1}")
         L.append("- encoder 输出经 residual_add 与 cover 相加并 clamp(0,1)")
-        L.append("- decoder 输出 logits (B,msg_len), 判决 bit = logit>0.5")
+        L.append("- decoder 输出 logits (B,msg_len), 判决 bit = logit>0 (bit_head 出 logits)")
         L.append("- 换积木 = 改 modules[].type, 通道会自动适配; 空间尺寸不自动, 须自洽")
         if extra_context:
             L.append("")

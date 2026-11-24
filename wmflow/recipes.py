@@ -139,7 +139,7 @@ VIDEOSEAL = {
     "fidelity": "模块级结构对照 (图像模型侧: 低频嵌入思想 → msg_map 平滑铺图 + "
                 "较深解码主干对应鲁棒检测+提取双任务); 时域一致性是视频侧逻辑不在此",
     "train_note": "以可微模糊为主的攻击训练 (blurring), 对物理拍摄/再编码鲁棒; "
-                  "检测头=bit logits 阈值 (detect), 提取=同 logits>0.5",
+                  "检测头=bit logits 阈值 (detect), 提取=同 logits>0",
     "attacks_train": ["blur", "noise", "jpeg_sim", "resize"],
 }
 

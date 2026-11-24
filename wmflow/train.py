@@ -305,6 +305,10 @@ def train(config: Dict[str, Any]):
             bad.append(f"{nm} 全部参数没有梯度")
         elif any(g is not None and not torch.isfinite(g).all() for g in gs):
             bad.append(f"{nm} 梯度含 inf/nan")
+        elif all(g is not None and float(g.abs().sum()) == 0.0 for g in gs
+                 if g is not None):
+            # 全零梯度 = 该侧不进优化 (典型: strength=0 时 encoder 输出被完全丢弃)
+            bad.append(f"{nm} 梯度全为 0 (该侧不会更新: 检查 strength 与连接)")
     enc.zero_grad(set_to_none=True)
     dec.zero_grad(set_to_none=True)
     if bad:
@@ -373,7 +377,8 @@ def train(config: Dict[str, Any]):
                 {"image": data_t, "message": bits_v})
             atk_v, _ = apply_attacks(emb_v, attacks, rng)
             logit_v = dec({"image": atk_v})
-            ber = float(((logit_v > 0.5).float() != bits_v).float().mean())
+            # bit_head 出 logits, BCEWithLogits 的判决边界是 0 (不是 0.5)
+            ber = float(((logit_v > 0).float() != bits_v).float().mean())
         rec = {"epoch": ep, "loss": round(ep_loss / steps_per, 5),
                "loss_img": round(ep_img / steps_per, 5),
                "loss_msg": round(ep_msg / steps_per, 5),

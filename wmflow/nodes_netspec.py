@@ -95,7 +95,7 @@ class NetSpecModel(Node):
                 img.transpose(2, 0, 1)))[None].float()
             with torch.no_grad():
                 logit = dec_mod({"image": x})[0]
-            return (logit > 0.5).cpu().numpy().astype(np.uint8)
+            return (logit > 0).cpu().numpy().astype(np.uint8)
 
         model = WMModel(framework=meta.get("framework", framework),
                         msg_len=msg_len_eff, encode_fn=encode, decode_fn=decode,
