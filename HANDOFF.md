@@ -36,7 +36,8 @@ wmflow/
                    # 训练侧攻击记 train_note 不进推理积木)
   llm.py           # debug/tune prompt + 模型回复 JSON 补丁解析 + 可选 API 钩子
                    # (凭据只走 WMFLOW_LLM_BASE_URL/API_KEY/MODEL 环境变量)
-  train.py         # 训练环: 可微攻击(gaussian_noise/blur/jpeg_approx(DCT+STE)/
+  train.py         # 训练环: 支持 framework='custom:<名>' (尺寸由配方锁定) + 训练前梯度自检;
+                   # 可微攻击(gaussian_noise/blur/jpeg_approx(DCT+STE)/
                    # crop_resize/dropout/combo) + BCE/MSE 加权 + epoch BER + ckpt
   nodes_core.py / nodes_models.py / nodes_netspec.py   # 14 个图节点
   webui.py         # 零依赖 http.server 的 web 服务 (21 个 /api/*)
@@ -46,7 +47,7 @@ webui_index.html   # 单页前端: 节点图画布(SVG 贝塞尔连线/类型彩
 prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
 scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
 tests/             # test_smoke(6)/test_netspec(9)/test_components(6)/
-                   # test_custom_recipes(6) 四套 27 项断言输出
+                   # test_custom_recipes(12)/test_train_custom(8) 五套
 workflows/         # 示例图 JSON
 custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓走)
 ```
@@ -66,11 +67,16 @@ custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓
 6. **组件库+组装台**：按框架分组的积木段货架（每框架 enc 7 段/dec 3 段 +
    13 自由单积木），拣段→排序→构建校验→追踪→作 enc/dec 跑流水线；跨框架混段
    实测通过（hidden.fusion + videoseal.res + hidden.out）。
-7. **自定义配方**（最新）：组装/混搭结果存盘 → 流水线/节点按名直用 → 导出/导入 JSON。
+7. **自定义配方**：组装/混搭结果存盘 → 流水线/节点按名直用 → 导出/导入 JSON。
    存盘前 dec bit_head msg_len 自动对齐 enc 并 build 校验（不过不落盘），原子写
    `custom_recipes/<名>.json`（gitignore）；两侧来源可各选（组装台当前 / 内置整段 /
    已存配方），故"混搭 enc + 内置 dec"也能一条指令落库。组件库「我的配方」货架可
    载入 enc/dec（拆回积木段续改）/ ▶流水线 / 导出 / 删除 / 导入 JSON。
+8. **自定义配方进训练**（最新）：训练面板框架下拉可选 `custom:<名>`，配方的 size/msg_len
+   锁定（表单冲突尺寸被忽略并记日志）；开训前跑一次 enc→dec 前向+反向做**梯度自检**
+   （含"全零梯度"判定）；ckpt 存结构快照 + `recipe` 字段。流水线选 ckpt 后按快照渲染，
+   配方被删/被覆盖仍可回放（有提示）；顺带修了"权重从未真正载入却标 trained"的老 bug，
+   以及 BER 判决阈值 `logit>0.5` 的错误口径（应为 `logit>0`）。
 
 ## 4. 操作手册
 
@@ -87,7 +93,7 @@ bash scripts/webui.sh start|stop|restart|status 7860
 #         bash scripts/webui.sh restart 7860   # fetch 与 merge 分开跑!
 
 # 测试
-python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_components.py && python tests/test_custom_recipes.py
+python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_components.py && python tests/test_custom_recipes.py && python tests/test_train_custom.py
 ```
 
 - 自定义配方用法：组装台搭好 →「💾 存为配方」（两侧来源可各选）→ 流水线「框架」下拉
@@ -138,13 +144,25 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 16. **前端异步竞态会写回旧 spec**：构建/补丁请求在途时改台子，旧响应回来会覆盖缓存，
     接着被存成配方。做法：台子状态计数器 `benchVer` + 缓存标记 `benchSideVer`，
     响应后比对版本/段快照/参数三元组，丢弃过期结果；存盘前再核对一次版本。
+17. **BER 判决边界是 logit>0，不是 >0.5**：`bit_head` 是 `Linear` 直出 logits，训练用
+    `BCEWithLogits`，所以判决阈值是 0。曾一律用 `>0.5`（等价于把 logit 当概率），
+    导致 BER 系统性偏高/失真。已统一改 `logit > 0`（train/webui/nodes_netspec），
+    改动后 BER 数值与旧记录不可直接对比。`nodes_models` 里 `sigmoid>0.5` 等价写法保留。
+18. **ckpt 必须绑结构快照，且回放要用同一实例**：训练出的 ckpt 存 `spec_enc/spec_dec`
+    （结构快照）+ 权重，回放时**以快照为准**，配方被删/被覆盖也能按原结构跑（并提示）。
+    另一个坑：`eb.as_module().load_state_dict(...)` 后再 `eb.as_module().eval()` 是
+    **两个不同实例**，权重从未生效却标 trained=True——模块只建一次、权重载入同一实例。
+    现在 `_resolve_demo_model()` 统一做这件事，测试用**逐元素比对嵌入图**抓这类回归
+    （只比 BER 抓不住）。
+19. **训练前必须做梯度自检**：自定义/混搭结构可能出现某侧是死分支（如 `strength=0`
+    时 encoder 输出被完全丢弃 → 梯度全 0）。只查 `None`/`inf` 会漏，必须查"全零梯度"，
+    否则白训数十轮才发现。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 
-- 组装/混搭模型进**训练面板**（现只单配方训练；`custom_recipes.pair()` 已备好接口，
-  训练环 `train.py` 还需接受 `custom:<名>` 作为 framework）
 - 四配方**真训练权重**（现在都是 untrained 结构演示，lsb_toy 才是真嵌入）
 - 损失曲线图、多 run 对比、val 集划分
+- 7860 **访问控制**（无鉴权，见 §5 #10）；建议反向代理单用户认证 + 限公网入口
 - scw 物理层（pimog/esmn，numpy 不可微）进训练的 **STE 直通方案**待设计
 - 服务守护化（systemd）；段级 trace 缩略图；画布拖拽/缩放
 - 自定义配方的**段级复用**（现在整网载入后拆回组装台；还没做到"把别人配方里的

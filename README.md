@@ -61,8 +61,17 @@
 - 组装台「💾 存为配方」：**两侧来源可各选**（组装台当前 / 内置框架整段 / 已存配方），所以"混搭 enc + 内置 dec"这种半新半旧的组合也能一条指令落库。
 - 组件库「我的配方」货架：载入 enc/dec（会拆回积木段继续拣）、▶ 流水线直跑、导出 `.json`、删除；「导入 JSON」接受完整记录 / `{encoder,decoder}` / `{recipe:{...}}` 三种写法。
 - API：`/api/recipe_save | recipe_list | recipe_get | recipe_delete | recipe_export | recipe_import`。
-- 口径不变：存的是**结构**，权重仍是随机/训练产出；"自定义配方进训练面板"是下一步。
+- 口径不变：存的是**结构**，权重仍是随机/训练产出。
 
+## 自定义配方进训练（结构快照 + 权重回放）
+
+训练面板「框架」下拉可直接选 `custom:<名>`：配方决定结构与尺寸/消息长（表单里冲突的尺寸被忽略并记日志），**训练仍从零随机初始化权重**——配方只定结构。
+
+- **开训前梯度自检**：跑一次 `enc→dec` 前向+反向，确认两侧参数都有有限且非全零的梯度（`strength=0` 这类死分支会被直接拦下，不白跑几十轮）。
+- **ckpt 绑定结构快照**：`ckpt_epN.pt` 存 `spec_enc/spec_dec` + 权重 + `recipe` 名；回放以快照为准，配方**被删或被改写成别的结构**时旧 ckpt 仍按原结构运行并给出提示。
+- **权重回放修正**：此前 `eb.as_module().load_state_dict()` 与随后 `as_module().eval()` 是两个不同实例，权重从未生效却标 `trained`；现在模块只建一次、权重载入同一实例，回归测试用**逐元素比对嵌入图**（不是只比 BER）钉住。
+- **口径**：`bit_head` 直出 logits、训练用 `BCEWithLogits`，判决/BER 阈值是 `logit>0`（旧代码误用 `>0.5`，已统一修正，旧 BER 记录不可直接对比）。`lsb_toy` 标 `algorithmic`（确定性算法嵌入），不冒充训练权重。
+- API：`/api/train_start` 传 `framework='custom:<名>'`；`/api/run_demo` 传 `ckpt_path`（须在 `runs/` 下）。
 ## LLM 专用 prompt（找 bug / 调参 / 自动适配闭环）
 
 每个 NetSpec 自带**系统化描述 prompt**：任务+模块目录（含层组成）+积木清单+形状解析表+约束，可直接贴任意大模型 API：
@@ -105,3 +114,4 @@ python run.py workflows/smoke_ablation.json --validate-only
 - [x] 全链路冒烟（嵌入→combo攻击→wechat_lite→提取→BER→报告落盘）
 - [x] 积木系统：13 模块目录 / 三配方 enc→dec 前向 128² / 自动插 adapter / 换积木 / LLM 补丁闭环 / debug prompt（tests/test_netspec.py 8 项）
 - [x] 自定义配方：组装/混搭存盘 → 消息长自动对齐 → 导出/导入 → 流水线直跑（tests/test_custom_recipes.py 6 组）
+- [x] 自定义配方进训练：`custom:<名>` + 梯度自检 + ckpt 结构快照回放 + `logit>0` 口径（tests/test_train_custom.py 8 组）
