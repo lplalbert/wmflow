@@ -322,6 +322,22 @@ def train(config: Dict[str, Any]):
     n = data.shape[0]
     data_t = torch.from_numpy(data).permute(0, 3, 1, 2).to(device)
 
+    # 验证集划分: 默认 10%, 太小 (n<10) 或 val_ratio<=0 时退回全量评估
+    val_ratio = float(config.get("val_ratio", 0.1))
+    n_val = max(1, int(n * val_ratio)) if val_ratio > 0 and n >= 10 else 0
+    if n_val:
+        split_rng = np.random.default_rng(int(config.get("seed", 0)) + 1)
+        perm_all = split_rng.permutation(n)
+        val_idx = torch.from_numpy(perm_all[:n_val]).to(device)
+        train_idx = torch.from_numpy(perm_all[n_val:]).to(device)
+        val_t = data_t[val_idx]
+        data_t = data_t[train_idx]          # 训练只看训练子集
+        n = train_idx.numel()
+        st.say(f"验证集: {n_val} 张 ({val_ratio:.0%}), 训练 {n} 张")
+    else:
+        val_t = data_t
+        st.say("验证集: 未划分 (样本过少或 val_ratio=0), epoch 末按全量评估")
+
     msg_len = enc_spec.inputs["message"][0]
     opt = torch.optim.Adam(
         list(enc.parameters()) + list(dec.parameters()),
@@ -370,11 +386,12 @@ def train(config: Dict[str, Any]):
                                 "total_steps": steps_per})
         if st.stop_flag:
             break
-        # epoch 末 BER (攻击后)
+        # epoch 末 BER (攻击后, 在验证集上; 无 val 时为全量)
         with torch.no_grad():
-            bits_v = (torch.rand(n, msg_len, device=device) > 0.5).float()
-            emb_v = (1 - strength) * data_t + strength * enc(
-                {"image": data_t, "message": bits_v})
+            n_val_eval = val_t.shape[0]
+            bits_v = (torch.rand(n_val_eval, msg_len, device=device) > 0.5).float()
+            emb_v = (1 - strength) * val_t + strength * enc(
+                {"image": val_t, "message": bits_v})
             atk_v, _ = apply_attacks(emb_v, attacks, rng)
             logit_v = dec({"image": atk_v})
             # bit_head 出 logits, BCEWithLogits 的判决边界是 0 (不是 0.5)
@@ -382,10 +399,12 @@ def train(config: Dict[str, Any]):
         rec = {"epoch": ep, "loss": round(ep_loss / steps_per, 5),
                "loss_img": round(ep_img / steps_per, 5),
                "loss_msg": round(ep_msg / steps_per, 5),
-               "ber": round(ber, 4)}
+               "ber": round(ber, 4), "val_ber": round(ber, 4),
+               "val_n": n_val_eval}
         st.history.append(rec)
         st.say(f"epoch {ep}: loss={rec['loss']} img={rec['loss_img']} "
-               f"msg={rec['loss_msg']} ber={rec['ber']}")
+               f"msg={rec['loss_msg']} val_ber={rec['val_ber']}"
+               + ("" if n_val else " (全量)"))
         # 预览图 (首样本)
         with torch.no_grad():
             one = data_t[:1]

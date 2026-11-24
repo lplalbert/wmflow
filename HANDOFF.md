@@ -95,6 +95,11 @@ custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓
    数据；`FS_ROOTS` 改由 `WMFLOW_FS_ROOTS` 配置；前端 `api()` 自动带 token，并修了
    `fsScan` 在无可用根目录时把 `undefined` 再喂给自身的递归问题。CI 增加可选 `e2e` job
    （`continue-on-error`），e2e 支持 `WMFLOW_E2E_TOKEN` 并断言无 token 返回 401。
+12. **验证集划分 + 训练曲线（本轮）**：训练前按 `val_ratio`（默认 0.1，`n<10` 或 `0`
+   时不划分、epoch 末按全量评估并注明）做确定性划分（seed+1 派生，可复现）；epoch 末
+   BER 改在验证集上算（判决口径仍是 `logit>0`），history 新增 `val_ber`/`val_n`（`ber`
+   字段保留兼容、同值）。训练面板加 `val_ratio` 输入；loss/BER 卡上方加 SVG 双轴曲线
+   （loss 按 max 归一、BER 右轴 0..1，旧记录 `??ber` 回落），随轮询增量重绘。
 
 ## 4. 操作手册
 
@@ -204,7 +209,7 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 ## 6. 未完成 / 下一步（按优先级候选）
 
 - 四配方**真训练权重**（现在都是 untrained 结构演示，lsb_toy 才是真嵌入）
-- 损失曲线图、多 run 对比、val 集划分
+- 多 run 对比（loss 曲线/val 集划分已做，见 §3 #12；还差跨 run 并列对比）
 - 7860 **访问控制**（无鉴权，见 §5 #10）；建议反向代理单用户认证 + 限公网入口
 - scw 物理层（pimog/esmn，numpy 不可微）进训练的 **STE 直通方案**待设计
 - 服务守护化（systemd）；段级 trace 缩略图；画布拖拽/缩放
