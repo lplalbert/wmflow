@@ -788,10 +788,17 @@ function openEdit(mid) {
 async function applyEdit() {
   const patch = [{id: editSel, replace_type: $('editType').value,
                   params: JSON.parse($('editParams').value || '{}')}];
+  const ver = benchVer;
   const r = await api('/api/swap', {spec: blocksSpec, patch});
   if (!r.ok) { $('editStatus').textContent = r.error; $('editStatus').className='status err'; return; }
+  if (ver !== benchVer) {          // 请求在途时台子被改过 → 丢弃, 免覆盖新状态
+    $('editStatus').textContent = '组装台已变更, 本次补丁丢弃, 请重试';
+    $('editStatus').className = 'status err';
+    return;
+  }
+  benchVer++; benchSide = {};      // 结构变了: 在途构建作废, 缓存重写
   blocksSpec = r.spec;
-  benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;  // 编辑后同步缓存
+  benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;
   drawBlocks({});
   $('editStatus').textContent = '✓ 已套用, 自动适配完成';
   $('editStatus').className = 'status ok';
@@ -979,20 +986,40 @@ async function fsScan() {
   const path = $('dsPath').value.trim();
   const r = await api('/api/fs', {path});
   const el = $('fsList');
-  // 目录名来自服务器文件系统, 属外部输入: 一律 esc 后再进 innerHTML
-  if (r.error) { el.innerHTML = `<div class="status err">${esc(r.error)}</div>`; return; }
+  // 目录名/路径来自服务器文件系统 (外部输入), 一律用 DOM 文本节点, 不拼 HTML 串:
+  // 内联 onclick 里的 encodeURIComponent 不编码单引号, 仍能被文件名逃逸出 JS。
+  el.innerHTML = '';
+  if (r.error) {
+    const d = document.createElement('div');
+    d.className = 'status err'; d.textContent = r.error;
+    el.appendChild(d); return;
+  }
   if (r.roots) {
     $('dsPath').value = r.roots[0];
     return fsScan();
   }
-  let h = `<div class="row"><b style="font-size:12px">${esc(r.path)}</b>
-    <span class="status">本目录图片: ${esc(r.n_images)}</span></div>`;
+  const head = document.createElement('div');
+  head.className = 'row';
+  const b = document.createElement('b');
+  b.style.fontSize = '12px'; b.textContent = r.path;
+  const sp = document.createElement('span');
+  sp.className = 'status'; sp.textContent = `本目录图片: ${r.n_images}`;
+  head.append(b, sp); el.appendChild(head);
   for (const d of r.dirs) {
-    h += `<div class="dirrow" onclick="fsEnter(decodeURIComponent('${encodeURIComponent(d.path)}'))">
-      📁 ${esc(d.name)}<span class="n">${esc(d.n_images)} 图</span></div>`;
+    const row = document.createElement('div');
+    row.className = 'dirrow';
+    row.addEventListener('click', () => fsEnter(d.path));   // 闭包传原始路径
+    row.append('📁 ' + d.name);
+    const n = document.createElement('span');
+    n.className = 'n'; n.textContent = `${d.n_images} 图`;
+    row.appendChild(n);
+    el.appendChild(row);
   }
-  if (!r.dirs.length) h += '<div class="status">（无子目录）</div>';
-  el.innerHTML = h;
+  if (!r.dirs.length) {
+    const d = document.createElement('div');
+    d.className = 'status'; d.textContent = '（无子目录）';
+    el.appendChild(d);
+  }
 }
 function fsEnter(p) { $('dsPath').value = p; fsScan(); }
 function fsUp() {
@@ -1046,11 +1073,18 @@ async function trainPoll() {
        <figcaption>${k}</figcaption></figure>`).join('');
   }
   if (s.ckpts.length) {
-    $('tCkpt').innerHTML = `最新 ckpt: ${s.ckpts[s.ckpts.length-1]}
-      <button onclick="useCkpt('${s.ckpts[s.ckpts.length-1].replace(/'/g,"\\'")}')">
-      在流水线中使用</button>`;
+    // 路径来自文件系统, 不拼进 onclick/HTML: 用索引传参 + textContent 显示
+    window.__ckpts = s.ckpts;
+    const last = s.ckpts.length - 1;
+    $('tCkpt').innerHTML = '<span id="ckptPath"></span>' +
+      `<button onclick="useCkptIdx(${last})">在流水线中使用</button>`;
+    $('ckptPath').textContent = '最新 ckpt: ' + s.ckpts[last];
   }
   if (s.error) { $('tStatus').textContent = s.error; $('tStatus').className='status err'; }
+}
+function useCkptIdx(i) {
+  const p = (window.__ckpts || [])[i];
+  if (p) useCkpt(p);
 }
 function useCkpt(p) {
   refreshRuns();
@@ -1109,8 +1143,9 @@ async function applyReply() {
     {spec: blocksSpec, reply: $('reply').value});
   const s = $('replyStatus');
   if (!r.ok) { s.textContent = '失败: '+r.error; s.className='status err'; return; }
+  benchVer++; benchSide = {};      // 结构变了: 在途构建作废, 缓存重写
   blocksSpec = r.spec;
-  benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;  // 套补丁后同步
+  benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;
   drawBlocks({});
   s.textContent = '✓ 补丁已套用'; s.className='status ok';
   $('prompt').value = r.prompt;
