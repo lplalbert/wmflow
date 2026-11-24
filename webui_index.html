@@ -356,6 +356,11 @@ const TYPE_COLOR = { IMAGE:'var(--c-image)', MESSAGE:'var(--c-msg)',
 const CAT_COLOR = { basic:'#4f8cff', message:'#e0a33e', fusion:'#3fb96f',
   head:'#e05e5e', attention:'#b573ff', auto:'#9aa3b2', util:'#9aa3b2' };
 const $ = id => document.getElementById(id);
+// 配方标题/备注是用户自由文本, 进 innerHTML 前必须转义 (公网无鉴权时防持久化 XSS)
+function esc(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c =>
+    ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
 let RECIPES=null, MODULES=null;
 let view='pipe', graph={nodes:[],links:[]}, blocksSpec=null, editSel=null, mixSpec=null;
 let COMPONENTS=null, benchSegs=[];
@@ -596,11 +601,13 @@ function findSeg(fw, part, key) {
 function addSeg(fw, part, key) {
   const seg = findSeg(fw, part, key);
   benchSegs.push(JSON.parse(JSON.stringify(seg)));
+  benchSide = {};                 // 台子一变, 已构建的 spec 立即失效, 防存错配方
   renderBenchStrip();
 }
 function loadWhole(fw, part) {
   const g = COMPONENTS.groups.find(x => x.framework === fw);
   benchSegs = JSON.parse(JSON.stringify(g[part]));
+  benchSide = {};
   renderBenchStrip();
   buildBench();
 }
@@ -608,9 +615,14 @@ function moveSeg(i, d) {
   const j = i + d;
   if (j < 0 || j >= benchSegs.length) return;
   [benchSegs[i], benchSegs[j]] = [benchSegs[j], benchSegs[i]];
+  benchSide = {};
   renderBenchStrip();
 }
-function delSeg(i) { benchSegs.splice(i, 1); renderBenchStrip(); }
+function delSeg(i) {
+  benchSegs.splice(i, 1);
+  benchSide = {};
+  renderBenchStrip();
+}
 function benchClear() {
   benchSegs = []; benchSide = {}; blocksSpec = null;
   renderBenchStrip(); drawBlocks({});
@@ -638,6 +650,8 @@ async function buildBench() {
     size: +$('benchSize').value,
     segments: benchSegs});
   if (!r.ok) {
+    const part = $('benchMode').value === 'encoder' ? 'encoder' : 'decoder';
+    delete benchSide[part];        // 构建失败: 该侧缓存作废, 别把旧 spec 存成配方
     $('blockStatus').textContent = '构建失败: ' + r.error;
     $('blockStatus').className = 'status err';
     return null;
@@ -762,6 +776,7 @@ async function applyEdit() {
   const r = await api('/api/swap', {spec: blocksSpec, patch});
   if (!r.ok) { $('editStatus').textContent = r.error; $('editStatus').className='status err'; return; }
   blocksSpec = r.spec;
+  benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;  // 编辑后同步缓存
   drawBlocks({});
   $('editStatus').textContent = '✓ 已套用, 自动适配完成';
   $('editStatus').className = 'status ok';
@@ -787,22 +802,22 @@ function renderFwOptions() {
     sel.appendChild(grp);
   }
   grp.innerHTML = CUSTOM.map(r =>
-    `<option value="custom:${r.name}">${r.title} · ${r.msg_len}bit</option>`).join('');
+    `<option value="custom:${esc(r.name)}">${esc(r.title)} · ${esc(r.msg_len)}bit</option>`).join('');
 }
 function customCardHTML(r) {
-  const io = `${r.msg_len}bit · ${r.size}² · enc ${r.n_modules[0]} 块 / dec ${r.n_modules[1]} 块`;
+  const io = `${esc(r.msg_len)}bit · ${esc(r.size)}² · enc ${esc(r.n_modules[0])} 块 / dec ${esc(r.n_modules[1])} 块`;
   const src = (r.source && r.source.kind)
-    ? ` · 来自${r.source.kind === 'assemble' ? '组装台' : r.source.kind}` : '';
+    ? ` · 来自${r.source.kind === 'assemble' ? '组装台' : esc(r.source.kind)}` : '';
   return `<div class="seg-card rec-card">
-    <div class="t">${r.title}<span class="f">custom</span></div>
+    <div class="t">${esc(r.title)}<span class="f">custom</span></div>
     <div class="d">${io}${src}</div>
-    ${r.note ? `<div class="d" style="opacity:.8">${r.note}</div>` : ''}
+    ${r.note ? `<div class="d" style="opacity:.8">${esc(r.note)}</div>` : ''}
     <div class="mini-row">
-      <button onclick="loadCustomSide('enc','${r.name}')">载入 enc</button>
-      <button onclick="loadCustomSide('dec','${r.name}')">载入 dec</button>
-      <button onclick="useCustomPipe('${r.name}')">▶ 流水线</button>
-      <button onclick="exportCustom('${r.name}')">导出</button>
-      <button class="danger" onclick="delCustom('${r.name}')">删除</button>
+      <button onclick="loadCustomSide('enc',decodeURIComponent('${encodeURIComponent(r.name)}'))">载入 enc</button>
+      <button onclick="loadCustomSide('dec',decodeURIComponent('${encodeURIComponent(r.name)}'))">载入 dec</button>
+      <button onclick="useCustomPipe(decodeURIComponent('${encodeURIComponent(r.name)}'))">▶ 流水线</button>
+      <button onclick="exportCustom(decodeURIComponent('${encodeURIComponent(r.name)}'))">导出</button>
+      <button class="danger" onclick="delCustom(decodeURIComponent('${encodeURIComponent(r.name)}'))">删除</button>
     </div></div>`;
 }
 async function loadCustomSide(side, name) {
@@ -899,8 +914,12 @@ function copyExport() { navigator.clipboard.writeText(window.__exportJson || '')
 function downloadExport() {
   const blob = new Blob([window.__exportJson || ''], {type: 'application/json'});
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob); a.download = window.__exportName || 'recipe.json';
-  a.click(); URL.revokeObjectURL(a.href);
+  const url = URL.createObjectURL(blob);
+  a.href = url; a.download = window.__exportName || 'recipe.json';
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);   // 同步 revoke 可能让下载落空
 }
 function importCustom() {
   openDlg('导入配方 JSON', `

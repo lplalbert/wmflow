@@ -19,6 +19,8 @@ import datetime as _dt
 import json
 import os
 import re
+import tempfile
+import threading
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -30,6 +32,24 @@ CUSTOM_DIR = Path(os.environ.get("WMFLOW_CUSTOM_RECIPES")
                   or (ROOT / "custom_recipes"))
 
 _SLUG_BAD = re.compile(r"[^\w\u4e00-\u9fff\-]+")
+# Windows 保留设备名 (含带扩展名的 CON.json 也非法), 一律拒
+_RESERVED = {"CON", "PRN", "AUX", "NUL",
+             *(f"COM{i}" for i in range(1, 10)),
+             *(f"LPT{i}" for i in range(1, 10))}
+
+_LOCKS: Dict[str, threading.Lock] = {}
+_LOCKS_GUARD = threading.Lock()
+
+
+def _lock_for(name: str) -> threading.Lock:
+    """同名操作串行化用的进程内锁 (webui 是单进程多线程)。"""
+    key = str(name).casefold()
+    with _LOCKS_GUARD:
+        lk = _LOCKS.get(key)
+        if lk is None:
+            lk = _LOCKS[key] = threading.Lock()
+        return lk
+
 
 
 # --------------------------------------------------------------------- 工具
@@ -42,11 +62,18 @@ def slugify(name: str) -> str:
     s = _SLUG_BAD.sub("_", (name or "").strip()).strip("_").strip(".")
     if not s:
         raise ValueError("配方名不能为空, 也不能只含非法字符")
+    if s.split(".")[0].upper() in _RESERVED:
+        raise ValueError(f"'{s}' 是 Windows 保留设备名, 换个名字")
     return s[:48]
 
 
 def _path(name: str) -> Path:
-    return CUSTOM_DIR / f"{slugify(name)}.json"
+    p = CUSTOM_DIR / f"{slugify(name)}.json"
+    # 防目录逃逸/symlink: 解析后的父目录必须就是配方目录
+    base = CUSTOM_DIR.resolve()
+    if p.parent.resolve() != base:
+        raise ValueError(f"配方路径越界: {p}")
+    return p
 
 
 def _read(p: Path) -> Dict[str, Any]:
@@ -55,12 +82,24 @@ def _read(p: Path) -> Dict[str, Any]:
 
 
 def _write(p: Path, rec: Dict[str, Any]) -> None:
+    """独立临时文件 + 原子替换; 失败清理临时文件 (同名并发也不会互相踩)。"""
     CUSTOM_DIR.mkdir(parents=True, exist_ok=True)
-    tmp = p.with_name(p.name + ".tmp")
-    with tmp.open("w", encoding="utf-8") as f:
-        json.dump(rec, f, ensure_ascii=False, indent=1)
-        f.write("\n")
-    os.replace(tmp, p)
+    fd, tmp = tempfile.mkstemp(dir=str(p.parent), prefix=p.stem + ".",
+                               suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            json.dump(rec, f, ensure_ascii=False, indent=1)
+            f.write("\n")
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, p)
+        tmp = None
+    finally:
+        if tmp and os.path.exists(tmp):
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
 
 
 # --------------------------------------------------------------- 校验/对齐
@@ -84,7 +123,7 @@ def align_decoder(enc_spec: Dict[str, Any],
 
 def _validate(enc_spec: Dict[str, Any],
               dec_spec: Dict[str, Any]) -> Tuple[NetSpec, NetSpec, Dict[str, Any]]:
-    """入库前硬校验: 两侧都能 build, 且 encoder 输出 / decoder 输出与消息长自洽。"""
+    """入库前硬校验: 两侧能 build、图像形状首尾相接、消息长自洽, 并真跑一次前向。"""
     enc, dec = NetSpec(enc_spec), NetSpec(dec_spec)
     try:
         eb, db = enc.build(), dec.build()
@@ -92,15 +131,47 @@ def _validate(enc_spec: Dict[str, Any],
         raise ValueError(f"配方构建失败: {e}") from e
     if "message" not in enc.inputs:
         raise ValueError("encoder 缺 message 输入, 不是图文水印编码器")
+    if "image" not in enc.inputs or "image" not in dec.inputs:
+        raise ValueError("encoder 与 decoder 都要有 image 输入")
+    ein = tuple(enc.inputs["image"])
+    din = tuple(dec.inputs["image"])
+    if len(ein) != 3 or ein[0] != 3:
+        raise ValueError(f"encoder 输入图像应为 (3,H,W), 实得 {ein}")
     msg_len = int(enc.inputs["message"][0])
     out = tuple(eb.out_shape)
     if len(out) != 3 or out[0] != 3:
         raise ValueError(f"encoder 输出应为 (3,H,W), 实得 {out}")
+    # 关键: encoder 输出尺寸必须与 decoder 声明接收的尺寸一致 (否则存进去也串不起来)
+    if out != din:
+        raise ValueError(f"encoder 输出 {out} 与 decoder 输入 {din} 尺寸不一致")
     if tuple(db.out_shape) != (msg_len,):
         raise ValueError(f"decoder 输出 {tuple(db.out_shape)} 与消息长 {msg_len} 不一致")
-    return enc, dec, {"msg_len": msg_len,
-                      "size": int(enc.inputs["image"][1]),
-                      "out_shape": list(out)}
+
+    # 真跑一次 enc→dec: 抓 build 查不出的运行期不兼容 (通道/广播/算子)
+    forward_checked = False
+    try:
+        import torch
+    except ImportError:
+        torch = None
+    if torch is not None:
+        _, H, W = out
+        try:
+            with torch.no_grad():
+                x = torch.rand(1, 3, H, W)
+                m = (torch.rand(1, msg_len) > 0.5).float()
+                y = eb.forward({"image": x, "message": m})
+                if tuple(y.shape) != (1, *out):
+                    raise ValueError(f"encoder 实跑输出 {tuple(y.shape)} ≠ (1,{out})")
+                z = db.forward({"image": y})
+            if tuple(z.shape) != (1, msg_len):
+                raise ValueError(f"前向输出 {tuple(z.shape)} ≠ (1,{msg_len})")
+            forward_checked = True
+        except ValueError:
+            raise
+        except Exception as e:
+            raise ValueError(f"enc→dec 串接前向失败 (结构拼不起来): {e}") from e
+    return enc, dec, {"msg_len": msg_len, "size": int(ein[1]),
+                      "out_shape": list(out), "forward_checked": forward_checked}
 
 
 # ------------------------------------------------------------------- 增删查
@@ -122,45 +193,56 @@ def _summary(rec: Dict[str, Any]) -> Dict[str, Any]:
     }
 
 
+_DERIVED = ("msg_len", "size", "out_shape", "forward_checked")
+
+
 def save(name: str, encoder: Dict[str, Any], decoder: Dict[str, Any], *,
          title: Optional[str] = None, note: str = "",
          source: Any = None, overwrite: bool = False,
          meta: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """存一条自定义配方 (先对齐 decoder 消息长, 再硬校验, 最后原子写盘)。"""
+    p = _path(name)                          # 先把名字/路径问题挡掉
     dec_fixed, aligned = align_decoder(encoder, decoder)
     enc, dec, info = _validate(encoder, dec_fixed)
-    p = _path(name)
-    if p.exists() and not overwrite:
-        raise FileExistsError(f"配方 '{p.stem}' 已存在 (勾选覆盖才重写)")
-    now = _now()
-    m: Dict[str, Any] = dict(info)
-    if note:
-        m["note"] = note
-    if source:
-        m["source"] = source
-    if aligned:
-        m["msg_len_aligned"] = True
-    m.update(meta or {})
-    rec = {"format": FORMAT, "name": p.stem,
-           "title": (title or p.stem).strip() or p.stem,
-           "created": now, "updated": now, "meta": m,
-           "encoder": enc.spec, "decoder": dec.spec}
-    if p.exists():                      # 覆盖时保留首次创建时间
-        try:
-            rec["created"] = _read(p).get("created") or now
-        except Exception:
-            pass
-    _write(p, rec)
+    with _lock_for(p.stem):                  # 存在检查与写入同一临界区
+        if p.exists() and not overwrite:
+            raise FileExistsError(f"配方 '{p.stem}' 已存在 (勾选覆盖才重写)")
+        now = _now()
+        m: Dict[str, Any] = dict(info)
+        for k, v in (meta or {}).items():    # 派生字段不许被 meta 覆盖
+            if k not in _DERIVED:
+                m[k] = v
+        if note:
+            m["note"] = note
+        if source:
+            m["source"] = source
+        if aligned:
+            m["msg_len_aligned"] = True
+        rec = {"format": FORMAT, "name": p.stem,
+               "title": (title or p.stem).strip() or p.stem,
+               "created": now, "updated": now, "meta": m,
+               "encoder": enc.spec, "decoder": dec.spec}
+        if p.exists():                       # 覆盖时保留首次创建时间
+            try:
+                rec["created"] = _read(p).get("created") or now
+            except Exception:
+                pass
+        _write(p, rec)
     return _summary(rec)
 
 
 def list_all() -> List[Dict[str, Any]]:
-    """列出全部自定义配方 (最近更新在前; 坏文件跳过并记 error)。"""
+    """列出全部自定义配方 (最近更新在前; 坏文件/并发删除都不让整表失败)。"""
     if not CUSTOM_DIR.is_dir():
         return []
+    entries = []
+    for p in CUSTOM_DIR.glob("*.json"):
+        try:
+            entries.append((p.stat().st_mtime, p))
+        except OSError:                 # 并发删除: 直接跳过
+            continue
     out: List[Dict[str, Any]] = []
-    for p in sorted(CUSTOM_DIR.glob("*.json"), key=lambda q: q.stat().st_mtime,
-                    reverse=True):
+    for _mt, p in sorted(entries, reverse=True):
         try:
             out.append(_summary(_read(p)))
         except Exception as e:
@@ -170,6 +252,8 @@ def list_all() -> List[Dict[str, Any]]:
 
 def get(name: str) -> Dict[str, Any]:
     p = _path(name)
+    if p.is_symlink():          # 防止目录被放入指向外部的链接
+        raise ValueError(f"配方文件是符号链接, 拒绝读取: {p}")
     if not p.is_file():
         raise FileNotFoundError(f"没有这条自定义配方: {p.stem}")
     rec = _read(p)
@@ -194,9 +278,10 @@ def exists(name: str) -> bool:
 
 def delete(name: str) -> bool:
     p = _path(name)
-    if not p.is_file():
-        raise FileNotFoundError(f"没有这条自定义配方: {p.stem}")
-    p.unlink()
+    with _lock_for(p.stem):
+        if not p.exists() or p.is_symlink():
+            raise FileNotFoundError(f"没有这条自定义配方: {p.stem}")
+        p.unlink()
     return True
 
 

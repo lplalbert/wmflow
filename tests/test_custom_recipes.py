@@ -159,6 +159,103 @@ def test_name_safety_and_delete():
         print("[ok] name safety: ../evil -> evil.json, chinese kept, overwrite keeps created")
 
 
+def test_size_mismatch_rejected():
+    """encoder 输出尺寸与 decoder 声明尺寸不一致必须拒绝 (Codex 评审阻断项 1)。"""
+    with temp_store():
+        enc, _, _ = RECIPES["hidden"]()                 # 128x128
+        _, dec64, _ = RECIPES["videoseal"](size=64)     # 声明收 64x64
+        try:
+            crec.save("sizemix", enc.spec, dec64.spec)
+            raise AssertionError("尺寸错配应被拒绝")
+        except ValueError as e:
+            assert "尺寸不一致" in str(e), e
+        assert crec.list_all() == [], "拒绝后不应留下任何配方文件"
+        print("[ok] size mismatch rejected: 128x128 enc + 64x64 dec -> refused, no file")
+
+
+def test_meta_cannot_override_derived():
+    """meta 不许覆盖已校验的 msg_len/size/out_shape。"""
+    with temp_store():
+        enc, dec, _ = RECIPES["hidden"]()
+        s = crec.save("metaover", enc.spec, dec.spec,
+                      meta={"msg_len": 999, "size": 32, "note": "keep"})
+        assert s["msg_len"] == 30 and s["size"] == 128, s
+        rec = crec.get("metaover")
+        assert rec["meta"]["msg_len"] == 30 and rec["meta"]["size"] == 128
+        assert rec["meta"]["note"] == "keep"
+        print("[ok] meta cannot override derived: msg_len/size kept, note kept")
+
+
+def test_concurrent_same_name():
+    """同名并发 save: 非覆盖写恰好一个成功, 不留临时文件。"""
+    import threading
+    with temp_store():
+        enc, dec, _ = RECIPES["hidden"]()
+        results, barrier = [], threading.Barrier(6)
+
+        def worker():
+            barrier.wait()
+            try:
+                crec.save("race", enc.spec, dec.spec)   # overwrite=False
+                results.append("ok")
+            except FileExistsError:
+                results.append("exists")
+            except Exception as e:                      # 任何其他异常都算失败
+                results.append(f"err:{type(e).__name__}")
+
+        ts = [threading.Thread(target=worker) for _ in range(6)]
+        [t.start() for t in ts]
+        [t.join() for t in ts]
+        assert results.count("ok") == 1, results
+        assert not any(r.startswith("err:") for r in results), results
+        rec = crec.get("race")                          # 文件必须完整可读
+        assert NetSpec(rec["encoder"]).build().out_shape == (3, 128, 128)
+        leftover = [p.name for p in Path(crec.CUSTOM_DIR).iterdir()
+                    if p.name.endswith(".tmp")]
+        assert leftover == [], f"残留临时文件: {leftover}"
+        print(f"[ok] concurrent same-name: {results.count('ok')} ok / "
+              f"{results.count('exists')} exists, no .tmp left")
+
+
+def test_reserved_and_symlink():
+    with temp_store():
+        enc, dec, _ = RECIPES["hidden"]()
+        for bad in ("CON", "NUL", "com1", "PRN"):
+            try:
+                crec.save(bad, enc.spec, dec.spec)
+                raise AssertionError(f"{bad} 应被拒绝")
+            except ValueError as e:
+                assert "保留" in str(e), e
+        crec.save("real", enc.spec, dec.spec)
+        # symlink 逃逸 (Windows 无权限时跳过)
+        outside = Path(crec.CUSTOM_DIR).parent / "outside.json"
+        outside.write_text('{"encoder":{},"decoder":{}}', encoding="utf-8")
+        link = Path(crec.CUSTOM_DIR) / "link.json"
+        try:
+            link.symlink_to(outside)
+        except (OSError, NotImplementedError):
+            print("[ok] reserved names rejected (symlink case skipped: no privilege)")
+            return
+        try:
+            crec.get("link")
+            raise AssertionError("symlink 应被拒绝")
+        except ValueError as e:
+            assert "符号链接" in str(e), e
+        print("[ok] reserved names + symlink escape rejected")
+
+
+def test_source_field_ambiguity():
+    """_recipe_side 同时给 spec/framework/name 必须拒绝 (不再静默忽略)。"""
+    import webui as W
+    with temp_store():
+        r = W.op_recipe_save({
+            "name": "amb", "encoder": {"kind": "framework", "framework": "hidden",
+                                       "spec": {"x": 1}},
+            "decoder": {"kind": "framework", "framework": "hidden"}})
+        assert not r["ok"] and "只能选一种来源" in r["error"], r
+        print("[ok] ambiguous source fields rejected")
+
+
 def test_webui_endpoints():
     """走 webui 的 op 层: 存(内置两侧) -> 列表 -> 导出 -> 流水线直跑自定义配方。"""
     import webui as W
@@ -190,6 +287,12 @@ def test_webui_endpoints():
                                 "strength": 1.0, "seed": 2,
                                 "layer": layer, "preset": "none"})
             assert dl["ok"], (layer, dl.get("error"))
+        # 两种调用风格都应生效: custom_recipe=<名> 与 framework='custom:<名>'
+        for payload in ({"framework": "custom", "custom_recipe": "ui_mix"},
+                        {"framework": "custom:ui_mix"}):
+            dl2 = W.op_run_demo({**payload, "strength": 1.0, "seed": 3,
+                                 "layer": "none", "preset": "none"})
+            assert dl2["ok"] and dl2["msg_len"] == 30, (payload, dl2.get("error"))
         dele = W.op_recipe_delete({"name": "ui_mix"})
         assert dele["ok"]
         print("[ok] webui ops: save/list/get/export/import/delete + run_demo(custom_recipe) "
@@ -201,6 +304,11 @@ if __name__ == "__main__":
     test_msg_len_auto_align()
     test_export_import_roundtrip()
     test_validation_rejects_bad()
+    test_size_mismatch_rejected()
+    test_meta_cannot_override_derived()
+    test_concurrent_same_name()
+    test_reserved_and_symlink()
+    test_source_field_ambiguity()
     test_name_safety_and_delete()
     test_webui_endpoints()
     print("\nALL CUSTOM RECIPE TESTS PASSED")

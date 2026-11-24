@@ -5,6 +5,8 @@ demo/
 runs/
 # 自定义配方 = 运行时资产 (服务器上攒的), 不随仓走; 要分享用「导出 JSON」
 custom_recipes/
+# Codex 协作草稿 (评审/计划原始回复), 归论文调研仓存档
+handoff/
 .vscode/
 *.pth
 *.pt

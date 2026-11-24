@@ -233,7 +233,11 @@ def op_run_demo(d):
     """全流程真跑: 载体→嵌入→攻击→提取, 逐节点输出可视化 + 指标。"""
     import numpy as np
     d = dict(d)
-    # 自定义配方 (组装台存下的) 归一成 enc_spec/dec_spec, 走同一条混搭通路
+    # 自定义配方归一: 支持 framework='custom:<名>' 与 custom_recipe='<名>' 两种写法
+    if not d.get("custom_recipe"):
+        fw0 = str(d.get("framework") or "")
+        if fw0.startswith("custom:"):
+            d["custom_recipe"] = fw0.split(":", 1)[1]
     if d.get("custom_recipe"):
         try:
             enc_c, dec_c, _mc = crec.pair(d["custom_recipe"])
@@ -473,10 +477,19 @@ def op_assemble(d):
 
 # ---------------------------------------------------------------- 自定义配方
 def _recipe_side(side, part):
-    """解析配方一侧网络的来源: 组装台 bench(spec) / 内置框架 framework / 已存 custom。"""
+    """解析配方一侧网络的来源: 组装台 bench(spec) / 内置框架 framework / 已存 custom。
+
+    只允许一种来源字段; 同时给多个直接拒绝, 免得多余字段被静默忽略 (曾默认按 kind 取)。
+    """
     if not isinstance(side, dict) or not side:
         raise ValueError(f"缺 {part} 侧网络 (可来自组装台/内置框架/已存配方)")
-    kind = side.get("kind") or ("bench" if side.get("spec") else "")
+    given = [k for k in ("spec", "framework", "name") if side.get(k)]
+    if len(given) > 1:
+        raise ValueError(f"{part} 侧同时给了 {given}, 只能选一种来源")
+    kind = side.get("kind") or (
+        "bench" if side.get("spec") else
+        "framework" if side.get("framework") else
+        "custom" if side.get("name") else "")
     if kind == "bench":
         if not side.get("spec"):
             raise ValueError(f"{part} 侧声明来自组装台但没有 spec (先点构建校验)")
