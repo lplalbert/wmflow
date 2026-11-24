@@ -272,6 +272,10 @@ def op_run_demo(d):
                 dec = dec.apply_patch(heads)
                 meta["msg_len_aligned"] = want
         else:
+            if framework not in RECIPES:
+                return {"ok": False,
+                        "error": f"未知框架 '{framework}' (内置: {sorted(RECIPES)}, "
+                                 f"或自定义配方用 custom:<名>)"}
             enc, dec, meta = RECIPES[framework]()
         eb, db = enc.build(), dec.build()
         trained = False

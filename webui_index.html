@@ -775,9 +775,18 @@ async function refreshCustom() {
   return CUSTOM;
 }
 function renderFwOptions() {
-  const grp = $('fwCustom');
-  if (!grp) return;
-  grp.innerHTML = (CUSTOM || []).map(r =>
+  const sel = $('fw');
+  let grp = $('fwCustom');
+  if (!CUSTOM || !CUSTOM.length) {          // 空组会留个秃标题, 直接摘掉
+    if (grp) grp.remove();
+    return;
+  }
+  if (!grp) {
+    grp = document.createElement('optgroup');
+    grp.id = 'fwCustom'; grp.label = '我的配方 (自定义)';
+    sel.appendChild(grp);
+  }
+  grp.innerHTML = CUSTOM.map(r =>
     `<option value="custom:${r.name}">${r.title} · ${r.msg_len}bit</option>`).join('');
 }
 function customCardHTML(r) {
@@ -821,6 +830,7 @@ async function delCustom(name) {
   if (!confirm(`删除自定义配方「${name}」? (只删服务器上这条记录, 不动内置配方)`)) return;
   const r = await api('/api/recipe_delete', {name});
   if (!r.ok) { alert(r.error); return; }
+  if ($('fw').value === `custom:${name}`) $('fw').value = 'hidden';
   await refreshCustom(); renderPalette();
 }
 
