@@ -365,6 +365,7 @@ let RECIPES=null, MODULES=null;
 let view='pipe', graph={nodes:[],links:[]}, blocksSpec=null, editSel=null, mixSpec=null;
 let COMPONENTS=null, benchSegs=[];
 let benchSide = {};          // 组装台已构建的两侧 NetSpec (encoder/decoder), 存配方用
+let benchVer = 0;            // 组装台状态版本: 异步构建返回时用来丢弃过期响应
 let CUSTOM = [];             // 自定义配方列表
 
 async function api(path, body) {
@@ -544,7 +545,7 @@ async function refreshRuns() {
   const r = await api('/api/runs');
   const sel = $('ckpt');
   sel.innerHTML = '<option value="">未训练</option>' +
-    r.runs.map(x => `<option value="${x.ckpt}">${x.run}</option>`).join('');
+    r.runs.map(x => `<option value="${esc(x.ckpt)}">${esc(x.run)}</option>`).join('');
 }
 
 /* ================= 组件库 + 组装台 ================= */
@@ -602,12 +603,13 @@ function addSeg(fw, part, key) {
   const seg = findSeg(fw, part, key);
   benchSegs.push(JSON.parse(JSON.stringify(seg)));
   benchSide = {};                 // 台子一变, 已构建的 spec 立即失效, 防存错配方
+  benchVer++;
   renderBenchStrip();
 }
 function loadWhole(fw, part) {
   const g = COMPONENTS.groups.find(x => x.framework === fw);
   benchSegs = JSON.parse(JSON.stringify(g[part]));
-  benchSide = {};
+  benchSide = {}; benchVer++;
   renderBenchStrip();
   buildBench();
 }
@@ -615,21 +617,25 @@ function moveSeg(i, d) {
   const j = i + d;
   if (j < 0 || j >= benchSegs.length) return;
   [benchSegs[i], benchSegs[j]] = [benchSegs[j], benchSegs[i]];
-  benchSide = {};
+  benchSide = {}; benchVer++;
   renderBenchStrip();
 }
 function delSeg(i) {
   benchSegs.splice(i, 1);
-  benchSide = {};
+  benchSide = {}; benchVer++;
   renderBenchStrip();
 }
-function benchInvalidate() {          // 模式/消息长/尺寸一改, 已构建的 spec 就作废
+function benchTouch() {               // 台子/参数一变: 缓存作废 + 版本 +1 (作废在途响应)
   benchSide = {};
+  benchVer++;
+}
+function benchInvalidate() {          // 模式/消息长/尺寸一改, 已构建的 spec 就作废
+  benchTouch();
   const st = $('blockStatus');
   if (st) { st.textContent = '参数已改, 请重新构建校验'; st.className = 'status'; }
 }
 function benchClear() {
-  benchSegs = []; benchSide = {}; blocksSpec = null;
+  benchSegs = []; benchSide = {}; benchVer++; blocksSpec = null;
   renderBenchStrip(); drawBlocks({});
 }
 
@@ -649,11 +655,15 @@ function renderBenchStrip() {
 }
 
 async function buildBench() {
+  const ver = ++benchVer;                        // 本次构建对应的台子版本
+  const segSnap = JSON.stringify(benchSegs);
   const r = await api('/api/assemble', {
     mode: $('benchMode').value,
     msg_len: +$('benchMsgLen').value,
     size: +$('benchSize').value,
     segments: benchSegs});
+  // 响应在途时台子/参数被改过 → 丢弃过期结果, 别把旧 spec 写回缓存
+  if (ver !== benchVer || JSON.stringify(benchSegs) !== segSnap) return null;
   if (!r.ok) {
     const part = $('benchMode').value === 'encoder' ? 'encoder' : 'decoder';
     delete benchSide[part];        // 构建失败: 该侧缓存作废, 别把旧 spec 存成配方
@@ -836,7 +846,7 @@ async function loadCustomSide(side, name) {
   $('benchSize').value = spec.input.image[1];
   if (isEnc) $('benchMsgLen').value = spec.input.message[0];
   blocksSpec = spec;
-  benchSide = {};                       // 整台被这条配方替换, 只有载入的这侧算数
+  benchSide = {}; benchVer++;            // 整台被这条配方替换, 只有载入的这侧算数
   benchSide[part] = spec;
   benchSegs = JSON.parse(JSON.stringify((r.segments || {})[part] || []));
   renderBenchStrip(); drawBlocks({});
@@ -969,16 +979,17 @@ async function fsScan() {
   const path = $('dsPath').value.trim();
   const r = await api('/api/fs', {path});
   const el = $('fsList');
-  if (r.error) { el.innerHTML = `<div class="status err">${r.error}</div>`; return; }
+  // 目录名来自服务器文件系统, 属外部输入: 一律 esc 后再进 innerHTML
+  if (r.error) { el.innerHTML = `<div class="status err">${esc(r.error)}</div>`; return; }
   if (r.roots) {
     $('dsPath').value = r.roots[0];
     return fsScan();
   }
-  let h = `<div class="row"><b style="font-size:12px">${r.path}</b>
-    <span class="status">本目录图片: ${r.n_images}</span></div>`;
+  let h = `<div class="row"><b style="font-size:12px">${esc(r.path)}</b>
+    <span class="status">本目录图片: ${esc(r.n_images)}</span></div>`;
   for (const d of r.dirs) {
-    h += `<div class="dirrow" onclick="fsEnter('${d.path.replace(/'/g,"\\'")}')">
-      📁 ${d.name}<span class="n">${d.n_images} 图</span></div>`;
+    h += `<div class="dirrow" onclick="fsEnter(decodeURIComponent('${encodeURIComponent(d.path)}'))">
+      📁 ${esc(d.name)}<span class="n">${esc(d.n_images)} 图</span></div>`;
   }
   if (!r.dirs.length) h += '<div class="status">（无子目录）</div>';
   el.innerHTML = h;
@@ -1026,9 +1037,9 @@ async function trainPoll() {
   $('tLog').scrollTop = $('tLog').scrollHeight;
   const h = $('tHist');
   h.innerHTML = '<tr><th>ep</th><th>loss</th><th>img</th><th>msg</th><th>ber</th></tr>' +
-    s.history.map(x => `<tr><td>${x.epoch}</td><td>${x.loss}</td>
-      <td>${x.loss_img}</td><td>${x.loss_msg}</td>
-      <td style="color:${x.ber<0.1?'var(--ok)':'var(--warn)'}">${x.ber}</td></tr>`).join('');
+    s.history.map(x => `<tr><td>${esc(x.epoch)}</td><td>${esc(x.loss)}</td>
+      <td>${esc(x.loss_img)}</td><td>${esc(x.loss_msg)}</td>
+      <td style="color:${x.ber<0.1?'var(--ok)':'var(--warn)'}">${esc(x.ber)}</td></tr>`).join('');
   if (s.previews.cover) {
     $('tPrev').innerHTML = ['cover','watermarked','attacked'].map(k =>
       `<figure><img src="data:image/png;base64,${s.previews[k]||''}">
