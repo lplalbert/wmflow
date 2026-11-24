@@ -131,6 +131,13 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 14. **服务器 git fetch 偶发 `GnuTLS recv error (-110)`**（HTTPS，网络抖动）：重试即通；
     但重试失败时 `merge` 会误报"已经是最新的"——先 `git rev-parse origin/main` 核对 sha
     再 merge。
+15. **`encodeURIComponent` 不编码单引号**：`onclick="f('${encodeURIComponent(p)}')"` 仍能被
+    文件名 `x');alert(1);//` 逃逸；凡把**外部字符串**（目录名/路径/用户标题）塞进
+    innerHTML 或内联事件，一律用 `textContent` + `addEventListener` 闭包，别拼串。
+    配方名因为过了 slugify（只剩 `\w` 与中文）才幸免。
+16. **前端异步竞态会写回旧 spec**：构建/补丁请求在途时改台子，旧响应回来会覆盖缓存，
+    接着被存成配方。做法：台子状态计数器 `benchVer` + 缓存标记 `benchSideVer`，
+    响应后比对版本/段快照/参数三元组，丢弃过期结果；存盘前再核对一次版本。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 
