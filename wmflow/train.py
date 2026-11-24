@@ -258,11 +258,26 @@ def train(config: Dict[str, Any]):
     from .recipes import RECIPES
 
     st = STATE
-    st.say(f"构建模型: {config['framework']}")
-    enc_spec, dec_spec, meta = RECIPES[config["framework"]](size=config["size"])
-    if config.get("msg_len"):
-        enc_spec, dec_spec, meta = RECIPES[config["framework"]](
-            msg_len=int(config["msg_len"]), size=config["size"])
+    fw = str(config["framework"])
+    if fw.startswith("custom:"):
+        from . import custom_recipes as crec
+        name = fw.split(":", 1)[1]
+        st.say(f"构建模型: 自定义配方 {name}")
+        enc_spec, dec_spec, meta = crec.pair(name)
+        size_eff = int(enc_spec.inputs["image"][1])
+        if int(config.get("size") or size_eff) != size_eff:
+            st.say(f"注意: 配方固定 {size_eff}², 已忽略表单尺寸 {config.get('size')}")
+        config = dict(config)
+        config["size"] = size_eff          # 配方尺寸优先, 下游一律用 config["size"]
+        st.say(f"配方结构: {size_eff}² · {enc_spec.inputs['message'][0]}bit · "
+               f"{meta.get('title', name)}")
+    else:
+        st.say(f"构建模型: {fw}")
+        if config.get("msg_len"):
+            enc_spec, dec_spec, meta = RECIPES[fw](
+                msg_len=int(config["msg_len"]), size=config["size"])
+        else:
+            enc_spec, dec_spec, meta = RECIPES[fw](size=config["size"])
     enc_b, dec_b = enc_spec.build(), dec_spec.build()
     enc, dec = enc_b.as_module(), dec_b.as_module()
 
@@ -271,6 +286,31 @@ def train(config: Dict[str, Any]):
     dec.to(device).train()
     st.say(f"设备: {device}" + (f" ({torch.cuda.get_device_name(0)})"
                                if device == "cuda" else ""))
+
+    # 训练前梯度自检 (Codex 计划要求): 一次前向+反向, 确认两侧参数都参与优化且梯度有限。
+    # 跨框架混搭/自定义配方最怕某侧参数没接上, 训练白跑几十轮才发现。
+    msg_len_chk = int(enc_spec.inputs["message"][0])
+    sz_chk = int(config["size"])
+    x = torch.rand(2, 3, sz_chk, sz_chk, device=device)
+    b = (torch.rand(2, msg_len_chk, device=device) > 0.5).float()
+    emb = (1 - float(config.get("strength", 1.0))) * x + \
+          float(config.get("strength", 1.0)) * enc({"image": x, "message": b})
+    chk = F.mse_loss(emb, x) + F.binary_cross_entropy_with_logits(
+        dec({"image": emb}), b)
+    chk.backward()
+    bad = []
+    for nm, mod in (("encoder", enc), ("decoder", dec)):
+        gs = [p.grad for p in mod.parameters() if p.requires_grad]
+        if not gs or all(g is None for g in gs):
+            bad.append(f"{nm} 全部参数没有梯度")
+        elif any(g is not None and not torch.isfinite(g).all() for g in gs):
+            bad.append(f"{nm} 梯度含 inf/nan")
+    enc.zero_grad(set_to_none=True)
+    dec.zero_grad(set_to_none=True)
+    if bad:
+        raise ValueError("训练前梯度自检失败: " + "; ".join(bad) +
+                         " (该结构这一侧可能是死分支, 训不动)")
+    st.say("梯度自检通过: encoder/decoder 两侧均有有限梯度")
 
     data, files = load_dataset(config["dataset_path"], int(config.get("n_images", 200)),
                                int(config["size"]), int(config.get("seed", 0)))
@@ -291,7 +331,7 @@ def train(config: Dict[str, Any]):
     steps_per = (n + bs - 1) // bs
 
     os.makedirs(RUNS_DIR, exist_ok=True)
-    run_name = f"{config['framework']}_{time.strftime('%m%d_%H%M%S')}"
+    run_name = f"{fw.replace(':', '-')}_{time.strftime('%m%d_%H%M%S')}"
     run_dir = os.path.join(RUNS_DIR, run_name)
     os.makedirs(run_dir, exist_ok=True)
 
@@ -360,7 +400,7 @@ def train(config: Dict[str, Any]):
         # ckpt
         ckpt = os.path.join(run_dir, f"ckpt_ep{ep}.pt")
         torch.save({"enc": enc.state_dict(), "dec": dec.state_dict(),
-                    "framework": config["framework"], "msg_len": msg_len,
+                    "framework": fw, "recipe": fw, "msg_len": msg_len,
                     "size": config["size"], "spec_enc": enc_spec.spec,
                     "spec_dec": dec_spec.spec, "epoch": ep,
                     "config": config}, ckpt)

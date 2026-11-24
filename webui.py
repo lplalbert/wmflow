@@ -254,6 +254,24 @@ def op_run_demo(d):
     seed = int(d.get("seed", 0))
     layer = d.get("layer", "none")
     preset = d.get("preset", "none")
+    structure_note = None
+    # 预读 ckpt: 训练产出绑定结构快照, 先读出来才能定尺寸 (必须在造载体之前)
+    ck = None
+    ckpt_path = d.get("ckpt_path")
+    if ckpt_path and not (framework == "lsb_toy" and not d.get("enc_spec")):
+        import os
+        import torch
+        real = os.path.realpath(ckpt_path)
+        from wmflow.train import RUNS_DIR
+        if not real.startswith(os.path.realpath(RUNS_DIR)):
+            return {"ok": False, "error": "ckpt 须在 runs/ 目录下"}
+        try:
+            ck = torch.load(real, map_location="cpu", weights_only=False)
+        except Exception as e:
+            return {"ok": False, "error": f"ckpt 读取失败: {e}"}
+        if not d.get("enc_spec"):
+            size = int(ck.get("size")
+                       or NetSpec(ck["spec_enc"]).inputs["image"][1])
 
     cover = _demo_cover(size, d.get("cover_upload"))
     # 模型: lsb_toy 真嵌入; 配方/自定义组装用随机权重演示结构 (标注 untrained)
@@ -263,8 +281,18 @@ def op_run_demo(d):
         model = make_lsb_toy(msg_len)
         trained = True
     else:
-        # 自定义组装: enc_spec/dec_spec 可来自不同配方 (跨框架混搭)
-        if d.get("enc_spec"):
+        structure_note = None
+        if ck is not None and not d.get("enc_spec"):
+            enc = NetSpec(ck["spec_enc"])
+            dec = NetSpec(ck["spec_dec"])
+            meta = {"framework": ck.get("recipe") or ck.get("framework", "ckpt")}
+            picked = d.get("framework")
+            if picked and picked not in (meta["framework"], "custom"):
+                structure_note = (f"已按 ckpt 的结构快照渲染 ({meta['framework']} "
+                                  f"{ck.get('size')}²/{ck.get('msg_len')}bit), "
+                                  f"忽略所选框架 {picked}")
+        elif d.get("enc_spec"):
+            # 自定义组装: enc_spec/dec_spec 可来自不同配方 (跨框架混搭)
             enc = NetSpec(d["enc_spec"])
             dec = NetSpec(d["dec_spec"])
             meta = {"framework": f"mix:{enc.name}+{dec.name}"}
@@ -281,21 +309,20 @@ def op_run_demo(d):
                         "error": f"未知框架 '{framework}' (内置: {sorted(RECIPES)}, "
                                  f"或自定义配方用 custom:<名>)"}
             enc, dec, meta = RECIPES[framework]()
+
         eb, db = enc.build(), dec.build()
-        trained = False
         msg_len = enc.inputs["message"][0]
-        # 加载训练产出的真权重 (可选)
-        ckpt_path = d.get("ckpt_path")
-        if ckpt_path:
-            import torch
-            import os
-            real = os.path.realpath(ckpt_path)
-            from wmflow.train import RUNS_DIR
-            if not real.startswith(os.path.realpath(RUNS_DIR)):
-                return {"ok": False, "error": "ckpt 须在 runs/ 目录下"}
-            ck = torch.load(real, map_location="cpu", weights_only=False)
-            eb.as_module().load_state_dict(ck["enc"])
-            db.as_module().load_state_dict(ck["dec"])
+        enc_mod, dec_mod = eb.as_module(), db.as_module()   # 只建一次, 权重就落这个实例
+        enc_mod.eval()
+        dec_mod.eval()
+        trained = False
+        if ck is not None:
+            try:
+                enc_mod.load_state_dict(ck["enc"])
+                dec_mod.load_state_dict(ck["dec"])
+            except Exception as e:
+                return {"ok": False,
+                        "error": f"ckpt 与当前结构不匹配 (权重无法载入): {e}"}
             trained = True
 
         def _enc(cover, bits, s):
@@ -304,7 +331,7 @@ def op_run_demo(d):
                 cover.transpose(2, 0, 1)))[None].float()
             m = torch.from_numpy(bits.astype(np.float32))[None]
             with torch.no_grad():
-                y = eb.as_module().eval()({"image": x, "message": m})[0]
+                y = enc_mod({"image": x, "message": m})[0]
             out = y.permute(1, 2, 0).cpu().numpy()
             return (1 - s) * cover + s * np.clip(out, 0, 1)
 
@@ -313,7 +340,7 @@ def op_run_demo(d):
             x = torch.from_numpy(np.ascontiguousarray(
                 img.transpose(2, 0, 1)))[None].float()
             with torch.no_grad():
-                logit = db.as_module().eval()({"image": x})[0]
+                logit = dec_mod({"image": x})[0]
             return (logit > 0.5).cpu().numpy().astype(np.uint8)
 
         class _M:
@@ -344,6 +371,7 @@ def op_run_demo(d):
 
     return {
         "ok": True, "trained": trained, "msg_len": msg_len,
+        "structure_note": structure_note,
         "attack_params": attack_params,
         "nodes": {
             "cover": {"kind": "image", "png": _png_b64(cover)},

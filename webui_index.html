@@ -261,11 +261,12 @@
         <div class="card">
           <h3>训练参数</h3>
           <div class="kv-form">
-            <label>框架</label><select id="tFw">
+            <label>框架</label><select id="tFw" onchange="onTrainFwChange()">
               <option value="hidden">hidden</option>
               <option value="stegastamp">stegastamp</option>
               <option value="mbrs">mbrs</option>
               <option value="videoseal">videoseal</option></select>
+            <label>结构</label><span id="tFwHint" class="caption">训练从零随机初始化权重</span>
             <label>epochs</label><input id="tEpochs" type="number" value="5" min="1">
             <label>batch_size</label><input id="tBatch" type="number" value="16" min="1">
             <label>lr</label><input id="tLr" type="number" value="0.001" step="0.0001">
@@ -537,7 +538,8 @@ async function runDemo() {
   renderGraph();
   $('pipeStatus').innerHTML = `✓ 完成 · BER <b>${d.nodes.metrics.ber}</b>` +
     (mixSpec ? ` · <b>${mixSpec.label}</b> (混搭)` : '') +
-    (isCustom ? ` · <b>${fwv.slice(7)}</b> (我的配方)` : '') +
+    (isCustom ? ` · <b>${esc(fwv.slice(7))}</b> (我的配方)` : '') +
+    (d.structure_note ? ` · <span style="color:var(--warn)">${esc(d.structure_note)}</span>` : '') +
     (d.trained ? '' : ' · <span style="color:var(--warn)">结构演示 (随机权重)</span>');
   $('pipeStatus').className = 'status ok';
 }
@@ -814,6 +816,7 @@ async function refreshCustom() {
   const r = await api('/api/recipe_list');
   CUSTOM = (r && r.ok && r.recipes) ? r.recipes : [];
   renderFwOptions();
+  if ($('tFw')) renderTrainFwOptions();
   return CUSTOM;
 }
 function renderFwOptions() {
@@ -991,6 +994,7 @@ function initTrainUI() {
   $('atkChecks').innerHTML = ATTACKS.map(a =>
     `<label class="chk"><input type="checkbox" value="${a}"
       ${a==='combo'?'checked':''}> ${a}</label>`).join('');
+  renderTrainFwOptions();
   fsScan();
 }
 
@@ -1061,6 +1065,33 @@ async function trainStop() {
 }
 
 let trainTimer = null;
+function renderTrainFwOptions() {
+  const sel = $('tFw'); if (!sel) return;
+  let grp = $('tFwCustom');
+  if (!CUSTOM || !CUSTOM.length) { if (grp) grp.remove(); onTrainFwChange(); return; }
+  if (!grp) {
+    grp = document.createElement('optgroup');
+    grp.id = 'tFwCustom'; grp.label = '我的配方 (自定义)';
+    sel.appendChild(grp);
+  }
+  grp.innerHTML = CUSTOM.map(r =>
+    `<option value="custom:${esc(r.name)}">${esc(r.title)} · ${esc(r.msg_len)}bit</option>`).join('');
+  onTrainFwChange();
+}
+// 选自定义配方时: 尺寸由配方固定 (禁用输入), 并说明"训练从零随机初始化"
+function onTrainFwChange() {
+  const v = $('tFw').value, sizeEl = $('dsSize'), hint = $('tFwHint');
+  if (v.startsWith('custom:')) {
+    const r = CUSTOM.find(x => 'custom:' + x.name === v);
+    if (r) { sizeEl.value = r.size; sizeEl.disabled = true; }
+    if (hint) hint.textContent = r
+      ? `配方结构固定 ${r.size}² / ${r.msg_len}bit；训练从零随机初始化权重 (配方只定结构)`
+      : '配方已删除, 请重选';
+  } else {
+    sizeEl.disabled = false;
+    if (hint) hint.textContent = '训练从零随机初始化权重';
+  }
+}
 async function trainPoll() {
   if (view !== 'train') return;
   const r = await api('/api/train_status');
