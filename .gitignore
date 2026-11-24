@@ -11,3 +11,8 @@ handoff/
 *.pth
 *.pt
 *.safetensors
+# Python 打包/测试产物
+*.egg-info/
+build/
+dist/
+.pytest_cache/

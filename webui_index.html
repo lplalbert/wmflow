@@ -370,9 +370,17 @@ let benchSideVer = -1;       // benchSide 对应哪一版组装台状态 (存盘
 let benchVer = 0;            // 组装台状态版本: 异步构建返回时用来丢弃过期响应
 let CUSTOM = [];             // 自定义配方列表
 
+const TOKEN = new URLSearchParams(location.search).get('token') || '';
+if (TOKEN) sessionStorage.setItem('wmflow_token', TOKEN);
+function authHeaders() {
+  const t = TOKEN || sessionStorage.getItem('wmflow_token') || '';
+  return t ? {'X-Wmflow-Token': t} : {};
+}
 async function api(path, body) {
-  const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'},
-                      body: JSON.stringify(body)} : {method:'GET'};
+  const opt = body
+    ? {method:'POST', headers:{'Content-Type':'application/json', ...authHeaders()},
+       body: JSON.stringify(body)}
+    : {method:'GET', headers:authHeaders()};
   const r = await fetch(path, opt);
   return r.json();
 }
@@ -589,7 +597,7 @@ async function renderPalette() {
     h += `<div class="pal-group"><h4>${g.framework}
       <span class="mini" onclick="loadWhole('${g.framework}','encoder')">整段载入 enc</span>
       <span class="mini" onclick="loadWhole('${g.framework}','decoder')">整段载入 dec</span></h4>`;
-    for (const part of ('encoder','decoder')) {
+    for (const part of ['encoder','decoder']) {
       h += `<div class="d" style="font-size:10px;color:var(--dim);margin:2px 0 4px">— ${part} —</div>`;
       for (const seg of g[part]) h += segCardHTML(g.framework, part, seg);
     }
@@ -710,6 +718,12 @@ function benchPipe(side) {
 
 function drawBlocks(thumbs) {
   const g = {nodes:[], links:[]};
+  if (!blocksSpec) {                 // 组装台被清空: 清画布并提示, 别读 null.input
+    graph = g; renderGraph();
+    const st = $('blockStatus');
+    if (st) { st.textContent = '组装台为空, 从右侧组件库拣段后点「构建校验」'; st.className = 'status'; }
+    return;
+  }
   const isEnc = !!blocksSpec.input.message;
   const inIds = {};
   let y = 40;
@@ -797,8 +811,20 @@ function openEdit(mid) {
 }
 
 async function applyEdit() {
-  const patch = [{id: editSel, replace_type: $('editType').value,
-                  params: JSON.parse($('editParams').value || '{}')}];
+  let params;
+  try {
+    params = JSON.parse($('editParams').value || '{}');
+  } catch (e) {
+    $('editStatus').textContent = '参数 JSON 解析失败: ' + e.message;
+    $('editStatus').className = 'status err';
+    return;
+  }
+  if (!params || typeof params !== 'object' || Array.isArray(params)) {
+    $('editStatus').textContent = '参数须为 JSON 对象, 如 {"out_ch": 32}';
+    $('editStatus').className = 'status err';
+    return;
+  }
+  const patch = [{id: editSel, replace_type: $('editType').value, params}];
   const ver = benchVer;
   const r = await api('/api/swap', {spec: blocksSpec, patch});
   if (!r.ok) { $('editStatus').textContent = r.error; $('editStatus').className='status err'; return; }
@@ -1016,6 +1042,12 @@ async function fsScan() {
     el.appendChild(d); return;
   }
   if (r.roots) {
+    if (!r.roots.length) {          // 服务器上没有可浏览根目录: 别把 undefined 再喂给 fsScan
+      const d = document.createElement('div');
+      d.className = 'status err';
+      d.textContent = '没有可浏览的根目录 (检查服务器路径或 WMFLOW_FS_ROOTS)';
+      el.appendChild(d); return;
+    }
     $('dsPath').value = r.roots[0];
     return fsScan();
   }
@@ -1175,13 +1207,24 @@ function setView(v) {
 async function genPrompt() {
   const mode = $('pmode').value;
   const fw = $('fw').value;
-  const spec = view==='blocks' ? blocksSpec
-    : (RECIPES && RECIPES[fw] ? RECIPES[fw].encoder : null);
-  const body = {spec: spec || blocksSpec, mode,
+  let spec = view==='blocks' ? blocksSpec : null;
+  if (!spec && RECIPES && RECIPES[fw]) spec = RECIPES[fw].encoder;
+  if (!spec && fw.startsWith('custom:')) {          // 自定义配方: 取它存的 encoder
+    const rr = await api('/api/recipe_get', {name: fw.slice(7)});
+    if (rr && rr.ok) spec = rr.recipe.encoder;
+  }
+  if (!spec) {     // lsb_toy 是算法玩具无 NetSpec; 或组装台未构建 → 给可读提示, 别发 null 给后端
+    $('prompt').value = '当前没有可描述的网络结构: 请先切到「积木链」构建一张网络, '
+      + '或在框架下拉里选一个内置框架 (lsb_toy 是确定性算法玩具, 没有 NetSpec 结构)。';
+    return;
+  }
+  let metrics = {};
+  try { metrics = JSON.parse($('metrics').value || '{}'); } catch (e) { metrics = {}; }
+  const body = {spec, mode,
     problem: $('problem').value, traceback: $('tb').value,
-    metrics: JSON.parse($('metrics').value || '{}'),
-    goal: $('goal').value};
+    metrics, goal: $('goal').value};
   const r = await api('/api/prompt', body);
+  if (r.error) { $('prompt').value = '生成失败: ' + r.error; return; }
   $('prompt').value = r.prompt;
 }
 function copyPrompt() { navigator.clipboard.writeText($('prompt').value); }
@@ -1209,6 +1252,12 @@ async function applyReply() {
 /* ================= 启动 ================= */
 (async function init() {
   const [rs, ms] = await Promise.all([api('/api/recipes'), api('/api/modules')]);
+  if ((rs && rs.error) || (ms && ms.error)) {
+    // 服务器开了 token 鉴权但本页没带: 给可操作提示, 别在 undefined 上继续渲染
+    const sub = document.querySelector('header .sub');
+    if (sub) sub.textContent = '未授权: 请在 URL 加 ?token=<令牌> 后重新打开页面';
+    return;
+  }
   RECIPES = rs.recipes; MODULES = ms.modules;
   await loadComponents();
   await refreshCustom();

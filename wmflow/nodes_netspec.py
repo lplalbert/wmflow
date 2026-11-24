@@ -26,7 +26,7 @@ class NetSpecModel(Node):
     def INPUT_TYPES(cls):
         return {"required": {
             "framework": (STRING, {"default": "hidden", "choices": [
-                "hidden", "stegastamp", "mbrs", "custom"],
+                "hidden", "stegastamp", "mbrs", "videoseal", "custom"],
                 "help": "内置配方名, 或 'custom:<配方名>' 引用自定义配方库"}),
             "spec_json": (STRING, {"default": "{}", "multiline": True,
                                     "help": "framework=custom 时用: "
@@ -42,8 +42,9 @@ class NetSpecModel(Node):
             if not exists(framework.split(":", 1)[1]):
                 return [f"自定义配方不存在: {framework.split(':', 1)[1]}"]
             return []
-        if framework not in ("hidden", "stegastamp", "mbrs", "custom"):
-            return [f"未知框架 {framework}"]
+        from .recipes import RECIPES
+        if framework not in RECIPES and framework != "custom":
+            return [f"未知框架 {framework} (内置: {sorted(RECIPES)}, custom 或 custom:<名>)"]
         if framework == "custom":
             import json
             try:
@@ -114,7 +115,7 @@ class NetSpecPrompt(Node):
     def INPUT_TYPES(cls):
         return {"required": {
             "framework": (STRING, {"default": "hidden", "choices": [
-                "hidden", "stegastamp", "mbrs", "custom"],
+                "hidden", "stegastamp", "mbrs", "videoseal", "custom"],
                 "help": "内置配方名, 或 'custom:<配方名>' 引用自定义配方库"}),
             "spec_json": (STRING, {"default": "{}", "multiline": True}),
             "mode": (STRING, {"default": "describe", "choices": [

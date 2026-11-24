@@ -1,9 +1,55 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "wmflow"
 version = "0.1.0"
 description = "Node-graph workflow engine for watermark embed/attack/decode/eval pipelines (clean-room)"
+readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy>=1.25", "opencv-python>=4.8"]
+license = { text = "MIT" }
+authors = [{ name = "lplalbert" }]
+keywords = [
+    "watermark",
+    "watermarking",
+    "node-graph",
+    "workflow",
+    "steganography",
+    "pytorch",
+]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Image Processing",
+]
+dependencies = [
+    "numpy>=1.25",
+    "opencv-python>=4.8",
+]
+
+[project.optional-dependencies]
+# 训练 / 积木网络需要 torch; 纯引擎 + 攻击链 + lsb_toy 冒烟可不用
+torch = ["torch>=2.0"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+wmflow-run = "run:main"
+wmflow-prompt = "prompt_tool:main"
+wmflow-webui = "webui:main"
+
+[project.urls]
+Homepage = "https://gitcode.com/lplalbert/wmflow"
+Repository = "https://gitcode.com/lplalbert/wmflow.git"
 
 [tool.setuptools]
 packages = ["wmflow"]
+py-modules = ["run", "prompt_tool", "webui"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

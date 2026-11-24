@@ -119,7 +119,11 @@ def test_full_pipeline():
         res = Executor().run(wf, only_outputs=wf["outputs"])
         save_report(res, wf, f"{td}/out")
         ber = res.metrics["8:BERCompare"]["ber"]
-        assert 0.0 <= ber <= 0.5, f"攻击后 BER={ber} 异常"
+        # LSB 玩具模型对 combo_builtin+wechat_lite 这类强攻击本就应失效: BER≈0.5 是
+        # 随机猜测水平; 统计波动下还会略超 0.5 (如 0.5156), 所以不能卡 <=0.5。
+        # 这里真正要守的是"攻击确实生效了 + BER 合法"。
+        assert 0.0 <= ber <= 1.0, f"攻击后 BER={ber} 越界"
+        assert ber > 0.1, f"攻击后 BER={ber} 过低, 攻击链可能没生效"
         assert (Path(td) / "out" / "report.json").exists()
         print(f"[ok] full pipeline: BER={ber:.3f} (combo_builtin+wechat_lite), 报告落盘")
 

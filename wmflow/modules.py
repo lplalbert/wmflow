@@ -174,7 +174,7 @@ def _dense_block(in_shapes, in_ch=None, growth=16, n_layers=3):
             super().__init__()
             self.convs = nn.ModuleList([
                 nn.Sequential(nn.Conv2d(c0 + g * i, g, 3, 1, 1),
-                              nn.BatchNorm2d(c0 + g * i if False else g), _act())
+                              nn.BatchNorm2d(g), _act())
                 for i in range(n)])
             self.out_ch = c0 + g * n
 

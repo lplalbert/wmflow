@@ -15,10 +15,13 @@
 from __future__ import annotations
 
 import argparse
+import hmac
 import json
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
 from wmflow.modules import MODULES
 from wmflow.netspec import NetSpec, NetSpecError
@@ -27,6 +30,10 @@ from wmflow import custom_recipes as crec
 from wmflow import llm
 
 ROOT = Path(__file__).parent
+
+# 访问令牌: 空 = 不鉴权 (默认, 适合本地/SSH 隧道); 非空时 /api/* 必须带
+# X-Wmflow-Token 头或 ?token= 查询参数。可用 --token 或 WMFLOW_WEBUI_TOKEN 设置。
+TOKEN = ""
 
 
 # ---------------------------------------------------------------- helpers
@@ -252,7 +259,9 @@ def _resolve_demo_model(d):
         import torch
         real = os.path.realpath(ckpt_path)
         from wmflow.train import RUNS_DIR
-        if not real.startswith(os.path.realpath(RUNS_DIR)):
+        runs_root = os.path.realpath(RUNS_DIR)
+        # 前缀校验必须带分隔符, 否则 /path/runs_evil 会被误判成在 /path/runs 下
+        if not (real == runs_root or real.startswith(runs_root + os.sep)):
             raise ValueError("ckpt 须在 runs/ 目录下")
         try:
             ck = torch.load(real, map_location="cpu", weights_only=False)
@@ -430,7 +439,9 @@ def op_trace(d):
 
 
 # ---------------------------------------------------------------- 数据集/训练
-FS_ROOTS = ["/home/lpl2025", "/data", "/mnt", "/root"]
+_env_roots = os.environ.get("WMFLOW_FS_ROOTS")
+FS_ROOTS = ([r for r in _env_roots.split(os.pathsep) if r] if _env_roots
+            else ["/home/lpl2025", "/data", "/mnt", "/root"])
 
 
 def op_fs(d):
@@ -646,11 +657,29 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def _authorized(self):
+        """token 为空则不鉴权; 否则校验请求头或 query 里的 token。"""
+        if not TOKEN:
+            return True
+        given = self.headers.get("X-Wmflow-Token", "")
+        if not given:
+            given = parse_qs(urlparse(self.path).query).get("token", [""])[0]
+        return hmac.compare_digest(str(given), TOKEN)
+
+    def _deny(self):
+        self._send(401, {"ok": False,
+                         "error": "未授权: 请在 URL 加 ?token=... 或在请求头带 X-Wmflow-Token"})
+
     def do_GET(self):
         if self.path in ("/", "/index.html"):
             self._send(200, (ROOT / "webui_index.html").read_bytes(),
                        "text/html; charset=utf-8")
+        elif self.path == "/favicon.ico":
+            self._send(204, b"")
         elif self.path.startswith("/api/"):
+            if not self._authorized():
+                self._deny()
+                return
             op = self.path[len("/api/"):].split("?")[0]
             if op in OPS:
                 try:
@@ -663,6 +692,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(404, {"error": "not found"})
 
     def do_POST(self):
+        if not self._authorized():
+            self._deny()
+            return
         ln = int(self.headers.get("Content-Length", 0))
         raw = self.rfile.read(ln) or b"{}"
         try:
@@ -693,9 +725,14 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--host", default="0.0.0.0")
     ap.add_argument("--port", type=int, default=7860)
+    ap.add_argument("--token", default=None,
+                    help="访问令牌; 缺省读 WMFLOW_WEBUI_TOKEN, 为空则不鉴权")
     args = ap.parse_args()
+    global TOKEN
+    TOKEN = args.token or os.environ.get("WMFLOW_WEBUI_TOKEN") or ""
     srv = ThreadingHTTPServer((args.host, args.port), Handler)
-    print(f"wmflow webui: http://{args.host}:{args.port}  "
+    tip = " (已启用 token 鉴权)" if TOKEN else " (未鉴权, 勿映射公网)"
+    print(f"wmflow webui: http://{args.host}:{args.port}{tip}  "
           f"(远程: http://<服务器IP>:{args.port}; 端口不通走 SSH 隧道 "
           f"ssh -L {args.port}:localhost:{args.port} lpl2025@<服务器IP>)")
     srv.serve_forever()

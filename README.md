@@ -91,11 +91,41 @@ python prompt_tool.py apply hidden --from-reply reply.txt   # 模型回复→补
 ## 快速开始
 
 ```bash
-python tests/test_smoke.py                            # 冒烟：机制 + 干净往返 BER=0
+# 1) 依赖：核心只需 numpy/opencv；训练与积木网络另装 torch
+python -m pip install -e .              # 或 pip install numpy opencv-python
+python -m pip install -e ".[torch]"     # 需要训练 / NetSpec 网络时
+
+# 2) 冒烟：机制 + 干净往返 BER=0（不依赖 demo 图）
+python tests/test_smoke.py
+
+# 3) 生成示例载体图（demo/ 是运行时资产、不进仓；幂等，已存在则跳过）
+python scripts/make_demo_cover.py
+
+# 4) 跑完整流水线 + 扫参
 python run.py workflows/smoke_ablation.json --out out/smoke
 python run.py workflows/smoke_ablation.json --set 5.layer=noise --set 6.preset=jpeg75
 python run.py workflows/smoke_ablation.json --validate-only
+
+# 5) 一键跑全部 5 套测试（与 CI 同一入口）
+bash scripts/test_all.sh
+
+# 6) 可选：WebUI 端到端点测（34 项，需 Playwright + chromium）
+python -m pip install playwright && playwright install chromium
+python tests/e2e_webui.py
+# 特殊环境（缺 libatomic / 自带 chromium）：
+#   WMFLOW_CHROME=/path/to/chrome WMFLOW_PW_LIB=/path/to/libdir python tests/e2e_webui.py
+# 验证鉴权： WMFLOW_E2E_TOKEN=secret python tests/e2e_webui.py
 ```
+
+### WebUI 启动与访问控制
+
+```bash
+python webui.py --host 0.0.0.0 --port 7860              # 默认不鉴权，仅限本地/SSH 隧道
+python webui.py --port 7860 --token <令牌>               # 或设 WMFLOW_WEBUI_TOKEN=<令牌>
+# 浏览器打开 http://<服务器IP>:7860/?token=<令牌>
+```
+- 开启令牌后，`/api/*` 必须带 `X-Wmflow-Token` 头或 `?token=`，否则返回 401（未鉴权时首页只给提示，不加载数据）。
+- 训练面板可浏览的根目录用 `WMFLOW_FS_ROOTS` 配置（`:` 分隔，默认 `/home/lpl2025:/data:/mnt:/root`）。
 
 扫参 = 外层 driver 用 `--set` 批量改写节点输入；图本身只描述单次执行（与冻结协议对齐：每张图一份 report.json，含全部种子与逐节点缓存键）。
 
@@ -115,3 +145,6 @@ python run.py workflows/smoke_ablation.json --validate-only
 - [x] 积木系统：13 模块目录 / 三配方 enc→dec 前向 128² / 自动插 adapter / 换积木 / LLM 补丁闭环 / debug prompt（tests/test_netspec.py 8 项）
 - [x] 自定义配方：组装/混搭存盘 → 消息长自动对齐 → 导出/导入 → 流水线直跑（tests/test_custom_recipes.py 6 组）
 - [x] 自定义配方进训练：`custom:<名>` + 梯度自检 + ckpt 结构快照回放 + `logit>0` 口径（tests/test_train_custom.py 8 组）
+- [x] 工程化：MIT LICENSE / pyproject 元数据（可选 `torch` extra、CLI 入口、pytest）/ `scripts/test_all.sh` + CI / demo 封面生成脚本
+- [x] WebUI 端到端：34 项点测（5 框架 / 攻击层 / 转码 / 组件库 / 逐积木追踪 / 节点编辑 / 存配方 / 自定义直跑 / LLM 三模式 / 训练面板），`tests/e2e_webui.py`（可选，需 Playwright）
+- [x] 访问控制与工程：`--token` / `WMFLOW_WEBUI_TOKEN` 的 `/api/*` 鉴权、`WMFLOW_FS_ROOTS` 可配、CI 增加可选 e2e job

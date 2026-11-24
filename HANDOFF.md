@@ -40,14 +40,17 @@ wmflow/
                    # 可微攻击(gaussian_noise/blur/jpeg_approx(DCT+STE)/
                    # crop_resize/dropout/combo) + BCE/MSE 加权 + epoch BER + ckpt
   nodes_core.py / nodes_models.py / nodes_netspec.py   # 14 个图节点
-  webui.py         # 零依赖 http.server 的 web 服务 (21 个 /api/*)
+  webui.py         # 零依赖 http.server 的 web 服务 (21 个 /api/*, 可选 token 鉴权)
 webui_index.html   # 单页前端: 节点图画布(SVG 贝塞尔连线/类型彩色端口/节点内嵌
                    # 图像·比特格·热图·指标预览) 四视图: 流水线/积木链(组件库+组装台+
                    # 我的配方)/训练 + 通用对话框(存配方/导出/导入)
 prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
 scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
+scripts/make_demo_cover.py  # 生成 demo/cover.png (demo/ 不进仓, 让快速开始开箱即跑)
+scripts/test_all.sh         # 5 套测试一键跑 (与 CI 同一入口)
 tests/             # test_smoke(6)/test_netspec(9)/test_components(6)/
                    # test_custom_recipes(12)/test_train_custom(8) 五套
+                   # e2e_webui.py: WebUI 端到端 34 项 (可选, 需 Playwright)
 workflows/         # 示例图 JSON
 custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓走)
 ```
@@ -77,6 +80,21 @@ custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓
    （含"全零梯度"判定）；ckpt 存结构快照 + `recipe` 字段。流水线选 ckpt 后按快照渲染，
    配方被删/被覆盖仍可回放（有提示）；顺带修了"权重从未真正载入却标 trained"的老 bug，
    以及 BER 判决阈值 `logit>0.5` 的错误口径（应为 `logit>0`）。
+9. **工程化收口**（本轮）：补齐 MIT LICENSE、pyproject 元数据（可选 `torch` extra /
+   CLI 入口 / pytest 配置）、`scripts/make_demo_cover.py`（demo/ 不进仓，一键生成示例
+   封面让快速开始可跑）、`scripts/test_all.sh` + GitHub Actions CI。同时修了一批缺陷：
+   冒烟测试把 LSB 强攻击下的 BER 错卡在 `<=0.5`、NetSpec 节点漏 `videoseal`、
+   ckpt 路径裸前缀校验可被 `/runs_evil` 绕过、`modules.py` 的 `if False` 残留。
+10. **WebUI 端到端点测**（本轮）：`tests/e2e_webui.py` 用 Playwright 真开页面点测 34 项
+   （5 框架 / 攻击层 / 转码 / 组件库 / 逐积木追踪 / 节点编辑 / 存配方 / 自定义直跑 /
+   LLM 三模式 / 训练面板），并修了 4 个前端 bug：组件库 `for...of` 逗号表达式导致整块
+   空白、清空组装台后 `drawBlocks` 读 null、节点编辑非法 JSON 未捕获、无结构时 genPrompt
+   发 null 给后端 500；顺手补了 `/favicon.ico` 204。
+11. **访问控制与工程收口（P0，本轮）**：`webui.py` 新增 `--token` / `WMFLOW_WEBUI_TOKEN`，
+   `/api/*` 校验 `X-Wmflow-Token` 或 `?token=`（空=不鉴权），首页在未授权时只给提示不加载
+   数据；`FS_ROOTS` 改由 `WMFLOW_FS_ROOTS` 配置；前端 `api()` 自动带 token，并修了
+   `fsScan` 在无可用根目录时把 `undefined` 再喂给自身的递归问题。CI 增加可选 `e2e` job
+   （`continue-on-error`），e2e 支持 `WMFLOW_E2E_TOKEN` 并断言无 token 返回 401。
 
 ## 4. 操作手册
 
@@ -86,6 +104,11 @@ cd /home/lpl2025/lpl/wmflow
 bash scripts/webui.sh start|stop|restart|status 7860
 # 解释器自动挑 (WMFLOW_PY 优先 → /data/miniconda_dir/envs/lpl/bin/python → 系统
 # python3); 系统 python3 没 numpy, 显式 WMFLOW_PY 仍可强制
+
+# WebUI 鉴权 (可选): 开启后 /api/* 需 ?token= 或 X-Wmflow-Token
+WMFLOW_WEBUI_TOKEN=secret bash scripts/webui.sh start 7860
+# 浏览器: http://<IP>:7860/?token=secret
+# 训练数据集可浏览根目录 (冒号分隔): WMFLOW_FS_ROOTS=/data:/mnt:/root
 
 # 部署流 (改完代码)
 # 本地: git add -A && git commit && git push origin main
@@ -157,6 +180,26 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 19. **训练前必须做梯度自检**：自定义/混搭结构可能出现某侧是死分支（如 `strength=0`
     时 encoder 输出被完全丢弃 → 梯度全 0）。只查 `None`/`inf` 会漏，必须查"全零梯度"，
     否则白训数十轮才发现。
+20. **ckpt 路径校验要带分隔符**：裸 `real.startswith(runs_root)` 会把 `/runs_evil`
+    当成 `/runs` 的子路径。正确写法 `real == root or real.startswith(root + os.sep)`。
+21. **demo/ 不进仓**：示例封面靠 `python scripts/make_demo_cover.py` 生成（幂等）；
+    README「快速开始」里先跑它再 `run.py`，否则 `smoke_ablation.json` 找不到封面。
+22. **`for...of` 别用逗号表达式**：`for (const part of ('encoder','decoder'))` 实际是字符串
+    `'decoder'` 逐字符遍历 → `g['d']` undefined → 组件库整体渲染抛错，整块空白。
+    必须写数组 `['encoder','decoder']`（e2e 抓到的首个阻断 bug）。
+23. **drawBlocks 要判空 blocksSpec**：点「清空组装台」会把 blocksSpec 置 null，紧接着
+    `drawBlocks({})` 读 `blocksSpec.input` 会 pageerror。入口先判空并清画布。
+24. **前端 JSON.parse 一律 try/catch**：节点编辑参数框、LLM 指标框直接 parse 非法输入
+    会抛未捕获异常，状态栏不更新。先解析失败就显示可读错误。
+25. **genPrompt 的 spec 可能为 null**：`lsb_toy` 没有 NetSpec、自定义配方未载入、组装台
+    空时，别把 null 丢给 `/api/prompt`（后端 KeyError→500，前端显示 undefined）。
+    先探测并给「请先构建网络/选内置框架」的提示。
+26. **token 鉴权默认关闭**：`TOKEN` 为空即不鉴权（保持本地/SSH 隧道体验）；一旦设置
+    `WMFLOW_WEBUI_TOKEN`，`/api/*` 必须带 `X-Wmflow-Token` 或 `?token=`，否则 401。
+    前端从 `?token=` 读入并存 sessionStorage，`api()` 自动带头——否则刷新页面仍能用。
+27. **`FS_ROOTS` 可能为空**：`WMFLOW_FS_ROOTS` 指向的目录都不存在时，`op_fs` 返回空
+    `roots: []`。前端必须判 `r.roots.length`，否则会把 `undefined` 当路径递归调用
+    `fsScan`（已修）。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 
@@ -167,8 +210,8 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 - 服务守护化（systemd）；段级 trace 缩略图；画布拖拽/缩放
 - 自定义配方的**段级复用**（现在整网载入后拆回组装台；还没做到"把别人配方里的
   某一段拣进我的台"）
-- LICENSE 选型（建议 MIT，未放文件）；**旧 fine-grained PAT 应吊销**（曾明文出现在
-  对话里，用户已知）
+- ~~LICENSE 选型~~：已放 MIT（`LICENSE` + pyproject `license` 字段）；**旧 fine-grained
+  PAT 应吊销**（曾明文出现在对话里，用户已知）
 
 ## 7. 口径纪律（论文相关，勿破）
 
