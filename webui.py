@@ -23,6 +23,7 @@ from pathlib import Path
 from wmflow.modules import MODULES
 from wmflow.netspec import NetSpec, NetSpecError
 from wmflow.recipes import RECIPES, describe_framework
+from wmflow import custom_recipes as crec
 from wmflow import llm
 
 ROOT = Path(__file__).parent
@@ -231,6 +232,16 @@ def _demo_cover(size, upload_b64=None):
 def op_run_demo(d):
     """全流程真跑: 载体→嵌入→攻击→提取, 逐节点输出可视化 + 指标。"""
     import numpy as np
+    d = dict(d)
+    # 自定义配方 (组装台存下的) 归一成 enc_spec/dec_spec, 走同一条混搭通路
+    if d.get("custom_recipe"):
+        try:
+            enc_c, dec_c, _mc = crec.pair(d["custom_recipe"])
+        except Exception as e:
+            return {"ok": False, "error": f"自定义配方加载失败: {e}"}
+        d["enc_spec"], d["dec_spec"] = enc_c.spec, dec_c.spec
+        d["framework"] = "custom"
+        d.pop("custom_recipe", None)
     framework = d.get("framework", "hidden")
     size = int(d.get("size", 128))
     if d.get("enc_spec"):
@@ -425,7 +436,7 @@ def op_runs(_d):
 
 
 def op_components(_d):
-    """组件库: 各框架的积木段货架 + 自由单积木。"""
+    """组件库: 各框架的积木段货架 + 自由单积木 + 我的配方。"""
     from wmflow.components import segment_spec, single_module_segments
     groups = []
     for fw, fn in RECIPES.items():
@@ -435,7 +446,8 @@ def op_components(_d):
             "encoder": segment_spec(enc.spec),
             "decoder": segment_spec(dec.spec),
         })
-    return {"groups": groups, "modules": single_module_segments()}
+    return {"groups": groups, "modules": single_module_segments(),
+            "custom": crec.list_all()}
 
 
 def op_assemble(d):
@@ -453,6 +465,105 @@ def op_assemble(d):
             "prompt": ns.render_prompt()}
 
 
+# ---------------------------------------------------------------- 自定义配方
+def _recipe_side(side, part):
+    """解析配方一侧网络的来源: 组装台 bench(spec) / 内置框架 framework / 已存 custom。"""
+    if not isinstance(side, dict) or not side:
+        raise ValueError(f"缺 {part} 侧网络 (可来自组装台/内置框架/已存配方)")
+    kind = side.get("kind") or ("bench" if side.get("spec") else "")
+    if kind == "bench":
+        if not side.get("spec"):
+            raise ValueError(f"{part} 侧声明来自组装台但没有 spec (先点构建校验)")
+        return side["spec"]
+    if kind == "framework":
+        fw = side.get("framework")
+        if fw not in RECIPES:
+            raise ValueError(f"未知内置框架 '{fw}', 可选: {sorted(RECIPES)}")
+        kw = {}
+        if side.get("msg_len"):
+            kw["msg_len"] = int(side["msg_len"])
+        if side.get("size"):
+            kw["size"] = int(side["size"])
+        enc, dec, _meta = RECIPES[fw](**kw)
+        return (enc if part == "encoder" else dec).spec
+    if kind == "custom":
+        enc, dec, _meta = crec.pair(side.get("name"))
+        return (enc if part == "encoder" else dec).spec
+    raise ValueError(f"不认识的来源 kind='{kind}' (bench/framework/custom)")
+
+
+def op_recipe_save(d):
+    """把组装台/混搭结果存成自定义配方 (自动对齐 dec 消息长 + 硬校验)。"""
+    name = (d.get("name") or "").strip()
+    if not name:
+        return {"ok": False, "error": "配方名不能为空"}
+    try:
+        enc_spec = _recipe_side(d.get("encoder"), "encoder")
+        dec_spec = _recipe_side(d.get("decoder"), "decoder")
+        summary = crec.save(name, enc_spec, dec_spec,
+                            title=d.get("title"), note=d.get("note", ""),
+                            source=d.get("source"),
+                            overwrite=bool(d.get("overwrite")))
+    except FileExistsError as e:
+        return {"ok": False, "exists": True, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "recipe": summary}
+
+
+def op_recipe_list(_d):
+    """列出全部自定义配方。"""
+    return {"ok": True, "recipes": crec.list_all(),
+            "dir": str(crec.CUSTOM_DIR)}
+
+
+def op_recipe_get(d):
+    """取一条配方: 两张 NetSpec + 形状报告 + prompt + 拆好的积木段 (可回组装台续改)。"""
+    from wmflow.components import segment_spec
+    try:
+        rec = crec.get(d["name"])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    enc, dec = NetSpec(rec["encoder"]), NetSpec(rec["decoder"])
+    return {"ok": True, "recipe": rec,
+            "report": {"encoder": build_report(enc), "decoder": build_report(dec)},
+            "segments": {"encoder": segment_spec(enc.spec),
+                         "decoder": segment_spec(dec.spec)},
+            "prompt": enc.render_prompt() + "\n\n" + dec.render_prompt()}
+
+
+def op_recipe_delete(d):
+    try:
+        crec.delete(d["name"])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "name": d["name"]}
+
+
+def op_recipe_export(d):
+    """导出为 JSON 文本 (前端可复制/下载)。"""
+    try:
+        fname, text = crec.export(d["name"])
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "filename": fname, "json": text}
+
+
+def op_recipe_import(d):
+    """从粘贴的 JSON 导入配方 (name 可改名, overwrite 覆盖)。"""
+    payload = d.get("json") or d.get("payload")
+    if not payload:
+        return {"ok": False, "error": "缺 JSON 内容"}
+    try:
+        summary = crec.import_json(payload, name=d.get("name") or None,
+                                   overwrite=bool(d.get("overwrite")))
+    except FileExistsError as e:
+        return {"ok": False, "exists": True, "error": str(e)}
+    except Exception as e:
+        return {"ok": False, "error": str(e)}
+    return {"ok": True, "recipe": summary}
+
+
 OPS = {
     "modules": op_modules, "recipes": op_recipes, "build": op_build,
     "swap": op_swap, "prompt": op_prompt, "apply_reply": op_apply_reply,
@@ -460,6 +571,9 @@ OPS = {
     "fs": op_fs, "train_start": op_train_start, "train_status": op_train_status,
     "train_stop": op_train_stop, "runs": op_runs,
     "components": op_components, "assemble": op_assemble,
+    "recipe_save": op_recipe_save, "recipe_list": op_recipe_list,
+    "recipe_get": op_recipe_get, "recipe_delete": op_recipe_delete,
+    "recipe_export": op_recipe_export, "recipe_import": op_recipe_import,
 }
 
 
@@ -491,9 +605,16 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         ln = int(self.headers.get("Content-Length", 0))
+        raw = self.rfile.read(ln) or b"{}"
         try:
-            d = json.loads(self.rfile.read(ln) or b"{}")
-        except json.JSONDecodeError as e:
+            # 浏览器是 UTF-8; Windows 下 curl/PowerShell 手搓请求可能是 GBK,
+            # 先按 UTF-8 解, 失败再按 gb18030 兜一次 (中文配方名/备注别直接 400)。
+            try:
+                text = raw.decode("utf-8")
+            except UnicodeDecodeError:
+                text = raw.decode("gb18030")
+            d = json.loads(text)
+        except (UnicodeDecodeError, json.JSONDecodeError) as e:
             self._send(400, {"error": f"JSON 解析失败: {e}"})
             return
         op = self.path[len("/api/"):].split("?")[0] if self.path.startswith("/api/") else ""

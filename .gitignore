@@ -3,6 +3,8 @@ __pycache__/
 out/
 demo/
 runs/
+# 自定义配方 = 运行时资产 (服务器上攒的), 不随仓走; 要分享用「导出 JSON」
+custom_recipes/
 .vscode/
 *.pth
 *.pt

@@ -50,7 +50,18 @@
 - **自动适配参数**：`in_ch` 不填自动继承上游；通道不符**自动插 1×1 adapter**（记录在 `auto_adapters`）；`msg_map` 目标尺寸、`bit_head` 消息长自动注入；补丁套用后自动重算适配。
 - **保真口径**：经典框架为"模块级结构对照"（层宽/深度合理化，差异在 `recipes.py` 逐条注明），不称官方等价复现。
 
-已配配方（`wmflow/recipes.py`）：`hidden`（HiDDeN ECCV'18）、`stegastamp`（CVPR'20）、`mbrs`（ACM MM'21）——三者训练侧攻击（Denoiser/可微扰动/真 JPEG mini-batch）记在 `train_note`，不进推理积木。
+已配配方（`wmflow/recipes.py`）：`hidden`（HiDDeN ECCV'18）、`stegastamp`（CVPR'20）、`mbrs`（ACM MM'21）、`videoseal`（2024，图像模型侧）——训练侧攻击（Denoiser/可微扰动/真 JPEG mini-batch）记在 `train_note`，不进推理积木。
+
+## 自定义配方（组装/混搭存盘 → 导出/导入）
+
+组装台搭出来的网络可以存成**自定义配方**，此后与内置四配方同权：流水线框架下拉里直接选、`NetSpecModel` 用 `custom:<名字>` 引用、导出 JSON 给别人导入。
+
+- 存盘前自动把 decoder 的 `bit_head.msg_len` 对齐 encoder 的消息长（混搭 30↔256bit 那个坑），并 build 校验两侧；校验不过不落盘。
+- 落盘在 `<repo>/custom_recipes/<名字>.json`（`WMFLOW_CUSTOM_RECIPES` 可覆盖目录；已进 `.gitignore`，属运行时资产不随仓走）。
+- 组装台「💾 存为配方」：**两侧来源可各选**（组装台当前 / 内置框架整段 / 已存配方），所以"混搭 enc + 内置 dec"这种半新半旧的组合也能一条指令落库。
+- 组件库「我的配方」货架：载入 enc/dec（会拆回积木段继续拣）、▶ 流水线直跑、导出 `.json`、删除；「导入 JSON」接受完整记录 / `{encoder,decoder}` / `{recipe:{...}}` 三种写法。
+- API：`/api/recipe_save | recipe_list | recipe_get | recipe_delete | recipe_export | recipe_import`。
+- 口径不变：存的是**结构**，权重仍是随机/训练产出；"自定义配方进训练面板"是下一步。
 
 ## LLM 专用 prompt（找 bug / 调参 / 自动适配闭环）
 
@@ -93,3 +104,4 @@ python run.py workflows/smoke_ablation.json --validate-only
 - [x] 类型检查拦截错线
 - [x] 全链路冒烟（嵌入→combo攻击→wechat_lite→提取→BER→报告落盘）
 - [x] 积木系统：13 模块目录 / 三配方 enc→dec 前向 128² / 自动插 adapter / 换积木 / LLM 补丁闭环 / debug prompt（tests/test_netspec.py 8 项）
+- [x] 自定义配方：组装/混搭存盘 → 消息长自动对齐 → 导出/导入 → 流水线直跑（tests/test_custom_recipes.py 6 组）

@@ -141,6 +141,18 @@
   .chip .op { cursor:pointer; color:var(--dim); padding:0 3px; }
   .chip .op:hover { color:var(--acc); }
   .chip .x:hover { color:var(--err); }
+
+  /* 自定义配方 + 对话框 */
+  .rec-card { border-color:#3a4356; }
+  .rec-card .mini-row { display:flex; gap:6px; flex-wrap:wrap; margin-top:6px; }
+  .rec-card .mini-row button { padding:1px 8px; font-size:11px; }
+  .overlay { position:fixed; inset:0; background:rgba(8,10,14,.72); z-index:60;
+      display:flex; align-items:center; justify-content:center; padding:20px; }
+  .dialog { background:var(--panel); border:1px solid var(--line); border-radius:12px;
+      width:min(780px,94vw); max-height:88vh; overflow:auto; padding:16px 18px;
+      box-shadow:0 12px 48px rgba(0,0,0,.55); }
+  .dialog h3 { margin:0 0 12px; font-size:14px; }
+  .dialog textarea { width:100%; font-family:ui-monospace,monospace; font-size:11px; }
 </style>
 </head>
 <body>
@@ -170,6 +182,7 @@
     <option value="stegastamp">stegastamp</option>
     <option value="mbrs">mbrs</option>
     <option value="videoseal">videoseal</option>
+    <optgroup label="我的配方 (自定义)" id="fwCustom"></optgroup>
   </select></label>
   <label>权重 <select id="ckpt"><option value="">未训练</option></select></label>
   <label>退化层 <select id="layer">
@@ -201,6 +214,7 @@
   <button class="primary" onclick="buildBench()">🔧 构建校验</button>
   <button onclick="runTrace()">▶ 逐积木追踪</button>
   <button onclick="benchClear()">清空组装台</button>
+  <button onclick="openSaveRecipe()">💾 存为配方</button>
   <span style="width:12px"></span>
   <button onclick="benchPipe('enc')">▶ 作为 enc 跑流水线</button>
   <button onclick="benchPipe('dec')">▶ 作为 dec 跑流水线</button>
@@ -345,6 +359,8 @@ const $ = id => document.getElementById(id);
 let RECIPES=null, MODULES=null;
 let view='pipe', graph={nodes:[],links:[]}, blocksSpec=null, editSel=null, mixSpec=null;
 let COMPONENTS=null, benchSegs=[];
+let benchSide = {};          // 组装台已构建的两侧 NetSpec (encoder/decoder), 存配方用
+let CUSTOM = [];             // 自定义配方列表
 
 async function api(path, body) {
   const opt = body ? {method:'POST', headers:{'Content-Type':'application/json'},
@@ -496,8 +512,11 @@ async function runDemo() {
     const r = new FileReader();
     r.onload = () => res(r.result); r.readAsDataURL(f);
   });
+  const fwv = $('fw').value;
+  const isCustom = fwv.startsWith('custom:');
   const d = await api('/api/run_demo', {
-    framework: $('fw').value, layer: $('layer').value,
+    framework: isCustom ? 'custom' : fwv, custom_recipe: isCustom ? fwv.slice(7) : null,
+    layer: $('layer').value,
     preset: $('preset').value, strength: +$('strength').value,
     seed: +$('seed').value, cover_upload,
     ckpt_path: $('ckpt').value || null,
@@ -511,6 +530,7 @@ async function runDemo() {
   renderGraph();
   $('pipeStatus').innerHTML = `✓ 完成 · BER <b>${d.nodes.metrics.ber}</b>` +
     (mixSpec ? ` · <b>${mixSpec.label}</b> (混搭)` : '') +
+    (isCustom ? ` · <b>${fwv.slice(7)}</b> (我的配方)` : '') +
     (d.trained ? '' : ' · <span style="color:var(--warn)">结构演示 (随机权重)</span>');
   $('pipeStatus').className = 'status ok';
 }
@@ -543,7 +563,14 @@ function segCardHTML(fw, part, seg) {
 
 async function renderPalette() {
   await loadComponents();
+  await refreshCustom();
   let h = '';
+  h += `<div class="pal-group"><h4>我的配方 (自定义)
+    <span class="mini" onclick="importCustom()">导入 JSON</span></h4>`;
+  h += CUSTOM.length
+    ? CUSTOM.map(customCardHTML).join('')
+    : `<div class="status" style="font-size:11px">还没有 — 组装台搭好后点「💾 存为配方」</div>`;
+  h += '</div>';
   for (const g of COMPONENTS.groups) {
     h += `<div class="pal-group"><h4>${g.framework}
       <span class="mini" onclick="loadWhole('${g.framework}','encoder')">整段载入 enc</span>
@@ -584,7 +611,10 @@ function moveSeg(i, d) {
   renderBenchStrip();
 }
 function delSeg(i) { benchSegs.splice(i, 1); renderBenchStrip(); }
-function benchClear() { benchSegs = []; blocksSpec = null; renderBenchStrip(); drawBlocks({}); }
+function benchClear() {
+  benchSegs = []; benchSide = {}; blocksSpec = null;
+  renderBenchStrip(); drawBlocks({});
+}
 
 function renderBenchStrip() {
   const el = $('benchStrip');
@@ -613,6 +643,7 @@ async function buildBench() {
     return null;
   }
   blocksSpec = r.spec;
+  benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;
   drawBlocks({});
   $('blockStatus').innerHTML = `✓ 构建通过 · 输出 ${JSON.stringify(r.report.out_shape)}` +
     (r.report.auto_adapters.length
@@ -735,6 +766,160 @@ async function applyEdit() {
   $('editStatus').textContent = '✓ 已套用, 自动适配完成';
   $('editStatus').className = 'status ok';
 }
+
+/* ================= 自定义配方 (我的配方) ================= */
+async function refreshCustom() {
+  const r = await api('/api/recipe_list');
+  CUSTOM = (r && r.ok && r.recipes) ? r.recipes : [];
+  renderFwOptions();
+  return CUSTOM;
+}
+function renderFwOptions() {
+  const grp = $('fwCustom');
+  if (!grp) return;
+  grp.innerHTML = (CUSTOM || []).map(r =>
+    `<option value="custom:${r.name}">${r.title} · ${r.msg_len}bit</option>`).join('');
+}
+function customCardHTML(r) {
+  const io = `${r.msg_len}bit · ${r.size}² · enc ${r.n_modules[0]} 块 / dec ${r.n_modules[1]} 块`;
+  const src = (r.source && r.source.kind)
+    ? ` · 来自${r.source.kind === 'assemble' ? '组装台' : r.source.kind}` : '';
+  return `<div class="seg-card rec-card">
+    <div class="t">${r.title}<span class="f">custom</span></div>
+    <div class="d">${io}${src}</div>
+    ${r.note ? `<div class="d" style="opacity:.8">${r.note}</div>` : ''}
+    <div class="mini-row">
+      <button onclick="loadCustomSide('enc','${r.name}')">载入 enc</button>
+      <button onclick="loadCustomSide('dec','${r.name}')">载入 dec</button>
+      <button onclick="useCustomPipe('${r.name}')">▶ 流水线</button>
+      <button onclick="exportCustom('${r.name}')">导出</button>
+      <button class="danger" onclick="delCustom('${r.name}')">删除</button>
+    </div></div>`;
+}
+async function loadCustomSide(side, name) {
+  const r = await api('/api/recipe_get', {name});
+  const st = $('blockStatus');
+  if (!r.ok) { st.textContent = r.error; st.className = 'status err'; return; }
+  const part = side === 'enc' ? 'encoder' : 'decoder';
+  const spec = r.recipe[part];
+  const isEnc = !!spec.input.message;
+  $('benchMode').value = isEnc ? 'encoder' : 'decoder';
+  $('benchSize').value = spec.input.image[1];
+  if (isEnc) $('benchMsgLen').value = spec.input.message[0];
+  blocksSpec = spec;
+  benchSide[part] = spec;
+  benchSegs = JSON.parse(JSON.stringify((r.segments || {})[part] || []));
+  renderBenchStrip(); drawBlocks({});
+  st.innerHTML = `✓ 已载入「${r.recipe.title}」的 <b>${part}</b> 侧 (段已拆回组装台, 可继续拣段/追踪)`;
+  st.className = 'status ok';
+}
+function useCustomPipe(name) {
+  setView('pipe');
+  setTimeout(() => { $('fw').value = `custom:${name}`; mixSpec = null; runDemo(); }, 60);
+}
+async function delCustom(name) {
+  if (!confirm(`删除自定义配方「${name}」? (只删服务器上这条记录, 不动内置配方)`)) return;
+  const r = await api('/api/recipe_delete', {name});
+  if (!r.ok) { alert(r.error); return; }
+  await refreshCustom(); renderPalette();
+}
+
+function sideSelectHTML(id, part) {
+  const has = !!benchSide[part];
+  let opts = `<option value="bench" ${has ? 'selected' : 'disabled'}>` +
+    `组装台当前 ${part}${has ? '' : ' (未构建)'}</option>`;
+  for (const fw of Object.keys(RECIPES))
+    opts += `<option value="fw:${fw}" ${!has && fw === 'hidden' ? 'selected' : ''}>内置 ${fw}</option>`;
+  for (const c of CUSTOM) opts += `<option value="cus:${c.name}">我的配方 ${c.name}</option>`;
+  return `<select id="${id}">${opts}</select>`;
+}
+function openSaveRecipe() {
+  if (!benchSide.encoder && !benchSide.decoder) {
+    const st = $('blockStatus');
+    st.textContent = '先在组装台搭一段 (🔧 构建校验) 再存配方'; st.className = 'status err';
+    return;
+  }
+  openDlg('存为自定义配方', `
+    <div class="kv-form">
+      <label>配方名</label><input id="svName" value="my_${Date.now().toString().slice(-5)}">
+      <label>显示标题</label><input id="svTitle" placeholder="留空=用配方名">
+      <label>备注</label><input id="svNote" placeholder="如: hidden.fusion + videoseal.res 混搭">
+      <label>encoder 侧</label>${sideSelectHTML('svEnc', 'encoder')}
+      <label>decoder 侧</label>${sideSelectHTML('svDec', 'decoder')}
+      <label>覆盖同名</label><input type="checkbox" id="svOv" style="width:auto">
+    </div>
+    <div class="caption">两侧来源可各选: 组装台当前 / 内置框架的整段 / 已存配方。
+      存盘前自动对齐 decoder 的 bit_head 消息长并 build 校验, 失败不落盘。</div>`,
+    doSaveRecipe, '保存');
+}
+function sidePayload(v) {
+  if (v === 'bench') return {kind: 'bench'};
+  if (v.startsWith('fw:')) return {kind: 'framework', framework: v.slice(3)};
+  return {kind: 'custom', name: v.slice(4)};
+}
+async function doSaveRecipe() {
+  const enc = sidePayload($('svEnc').value);
+  const dec = sidePayload($('svDec').value);
+  if (enc.kind === 'bench') enc.spec = benchSide.encoder;
+  if (dec.kind === 'bench') dec.spec = benchSide.decoder;
+  const r = await api('/api/recipe_save', {
+    name: $('svName').value.trim(), title: $('svTitle').value.trim() || null,
+    note: $('svNote').value.trim(), overwrite: $('svOv').checked,
+    encoder: enc, decoder: dec,
+    source: {kind: 'assemble', mode: $('benchMode').value,
+             segments: benchSegs.map(s => s.label)}});
+  const st = $('dlgStatus');
+  if (!r.ok) { st.textContent = r.error; st.className = 'status err'; return; }
+  st.textContent = '✓ 已保存 ' + r.recipe.name; st.className = 'status ok';
+  await refreshCustom(); renderPalette();
+  setTimeout(closeDlg, 700);
+}
+async function exportCustom(name) {
+  const r = await api('/api/recipe_export', {name});
+  if (!r.ok) { alert(r.error); return; }
+  window.__exportJson = r.json; window.__exportName = r.filename;
+  openDlg('导出配方: ' + name, `
+    <div class="caption">文件 ${r.filename} — 可复制存档, 或整段贴到别处「导入 JSON」</div>
+    <textarea id="expJson" rows="18" readonly></textarea>
+    <div class="row"><button onclick="copyExport()">复制</button>
+      <button onclick="downloadExport()">下载 .json</button></div>`, null);
+  $('expJson').value = r.json;
+}
+function copyExport() { navigator.clipboard.writeText(window.__exportJson || ''); }
+function downloadExport() {
+  const blob = new Blob([window.__exportJson || ''], {type: 'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = window.__exportName || 'recipe.json';
+  a.click(); URL.revokeObjectURL(a.href);
+}
+function importCustom() {
+  openDlg('导入配方 JSON', `
+    <div class="row"><label>配方名 <input id="impName" placeholder="留空=用 JSON 内的 name"></label>
+      <label><input type="checkbox" id="impOv"> 覆盖同名</label></div>
+    <textarea id="impJson" rows="14" placeholder='{"encoder": {...}, "decoder": {...}}'></textarea>
+    <div class="caption">接受: 本库导出的完整记录 / {encoder,decoder} 两段 NetSpec / {recipe:{...}}。
+      导入前一律 build 校验, 坏结构不入库。</div>`, doImport, '导入');
+}
+async function doImport() {
+  const r = await api('/api/recipe_import', {json: $('impJson').value,
+    name: $('impName').value.trim() || null, overwrite: $('impOv').checked});
+  const st = $('dlgStatus');
+  if (!r.ok) { st.textContent = r.error; st.className = 'status err'; return; }
+  st.textContent = '✓ 已导入 ' + r.recipe.name; st.className = 'status ok';
+  await refreshCustom(); renderPalette(); setTimeout(closeDlg, 700);
+}
+
+/* ================= 通用对话框 ================= */
+function openDlg(title, html, onOk, okLabel) {
+  $('dlgTitle').textContent = title;
+  $('dlgBody').innerHTML = html;
+  $('dlgOk').style.display = onOk ? '' : 'none';
+  $('dlgOk').textContent = okLabel || '确定';
+  $('dlgOk').onclick = onOk || closeDlg;
+  $('dlgStatus').textContent = '';
+  $('dlg').style.display = 'flex';
+}
+function closeDlg() { $('dlg').style.display = 'none'; }
 
 /* ================= 训练 ================= */
 const ATTACKS = ['none','gaussian_noise','blur','jpeg_approx','crop_resize','dropout','combo'];
@@ -888,8 +1073,20 @@ async function applyReply() {
   const [rs, ms] = await Promise.all([api('/api/recipes'), api('/api/modules')]);
   RECIPES = rs.recipes; MODULES = ms.modules;
   await loadComponents();
+  await refreshCustom();
   runDemo();
 })();
 </script>
+<div class="overlay" id="dlg" style="display:none">
+  <div class="dialog">
+    <h3 id="dlgTitle"></h3>
+    <div id="dlgBody"></div>
+    <div class="row" style="margin-top:12px;border-top:1px solid var(--line);padding-top:10px">
+      <button class="primary" id="dlgOk">确定</button>
+      <button onclick="closeDlg()">关闭</button>
+      <span id="dlgStatus" class="status"></span>
+    </div>
+  </div>
+</div>
 </body>
 </html>

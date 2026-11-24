@@ -30,6 +30,8 @@ wmflow/
   netspec.py       # NetSpec: 搭积木 JSON/自动适配(通道继承/插 adapter/参数注入)/
                    # LLM prompt 渲染/apply_patch 补丁闭环/forward_trace 逐块追踪
   components.py    # 自动切段器(积木段=组件) + 组装器(悬空引用回落上一块)
+  custom_recipes.py # 自定义配方库: 组装/混搭结果存 JSON (dec msg_len 自动对齐 + build
+                   # 校验 + 原子写) / 列表 / 导出导入 / pair() 给流水线·训练用
   recipes.py       # hidden/stegastamp/mbrs/videoseal 四配方 (模块级结构对照口径,
                    # 训练侧攻击记 train_note 不进推理积木)
   llm.py           # debug/tune prompt + 模型回复 JSON 补丁解析 + 可选 API 钩子
@@ -37,13 +39,16 @@ wmflow/
   train.py         # 训练环: 可微攻击(gaussian_noise/blur/jpeg_approx(DCT+STE)/
                    # crop_resize/dropout/combo) + BCE/MSE 加权 + epoch BER + ckpt
   nodes_core.py / nodes_models.py / nodes_netspec.py   # 14 个图节点
-  webui.py         # 零依赖 http.server 的 web 服务 (15 个 /api/*)
+  webui.py         # 零依赖 http.server 的 web 服务 (21 个 /api/*)
 webui_index.html   # 单页前端: 节点图画布(SVG 贝塞尔连线/类型彩色端口/节点内嵌
-                   # 图像·比特格·热图·指标预览) 三视图: 流水线/积木链(组件库+组装台)/训练
+                   # 图像·比特格·热图·指标预览) 四视图: 流水线/积木链(组件库+组装台+
+                   # 我的配方)/训练 + 通用对话框(存配方/导出/导入)
 prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
 scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
-tests/             # test_smoke(7)/test_netspec(9)/test_components(3) 三套
+tests/             # test_smoke(7)/test_netspec(9)/test_components(3)/
+                   # test_custom_recipes(6) 四套 25 项
 workflows/         # 示例图 JSON
+custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓走)
 ```
 
 ## 3. 已完成（按时间序）
@@ -58,9 +63,14 @@ workflows/         # 示例图 JSON
 5. **训练能力**：训练面板（服务器路径浏览含递归计数/图片数量/尺寸/噪声多选/
    epochs·batch·lr·strength·损失权重），后台训练+进度+loss/BER 表+逐 epoch 预览+
    ckpt 一键回灌流水线。**服务器 GPU 实测通过**（DIV2K×stegastamp×RTX 3090）。
-6. **组件库+组装台**（最新）：按框架分组的积木段货架（每框架 enc 7 段/dec 3 段 +
+6. **组件库+组装台**：按框架分组的积木段货架（每框架 enc 7 段/dec 3 段 +
    13 自由单积木），拣段→排序→构建校验→追踪→作 enc/dec 跑流水线；跨框架混段
    实测通过（hidden.fusion + videoseal.res + hidden.out）。
+7. **自定义配方**（最新）：组装/混搭结果存盘 → 流水线/节点按名直用 → 导出/导入 JSON。
+   存盘前 dec bit_head msg_len 自动对齐 enc 并 build 校验（不过不落盘），原子写
+   `custom_recipes/<名>.json`（gitignore）；两侧来源可各选（组装台当前 / 内置整段 /
+   已存配方），故"混搭 enc + 内置 dec"也能一条指令落库。组件库「我的配方」货架可
+   载入 enc/dec（拆回积木段续改）/ ▶流水线 / 导出 / 删除 / 导入 JSON。
 
 ## 4. 操作手册
 
@@ -76,8 +86,12 @@ bash scripts/webui.sh start|stop|restart|status 7860
 #         bash scripts/webui.sh restart 7860   # fetch 与 merge 分开跑!
 
 # 测试
-python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_components.py
+python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_components.py && python tests/test_custom_recipes.py
 ```
+
+- 自定义配方用法：组装台搭好 →「💾 存为配方」（两侧来源可各选）→ 流水线「框架」下拉
+  的「我的配方」组里直接选 → ▶ 运行；组件库「我的配方」可导出 `.json` / 导入。
+  节点内引用写 `framework="custom:<配方名>"`。配方目录 `custom_recipes/` 不进 git。
 
 - **服务器 git 已配 HTTPS fetch + SSH push**（deploy key
   `~/.ssh/id_ed25519_github_wmflow`）——SSH fetch 会挂起，勿改回。
@@ -103,15 +117,22 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
    核验，勿走 shell 管道（GBK 坑）。
 9. Windows GBK 控制台打不出 `²` 等字符会炸 print——测试文案用 ASCII。
 10. webui **无鉴权**，别把 7860 映射公网；要公网先加 token。
+11. **POST 体编码**：浏览器发 UTF-8，但 Windows 下 curl/PowerShell 手搓请求可能是 GBK
+    ——`do_POST` 先 UTF-8 解、失败再按 gb18030 兜一次，否则中文配方名/备注直接 400。
+    自己写压测脚本时也别用 `ConvertTo-Json` 默认编码直接当 body，要转 UTF-8 字节。
+12. **自定义配方是运行时资产**：`custom_recipes/` 已 gitignore，服务器上攒的配方不会
+    随 push 走；要跨端搬用「导出 JSON」，别指望 git。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 
-- 组装结果**保存为自定义配方**/导出 JSON（现在只能跑）
-- 组装/混搭模型进**训练**面板（现只单配方训练）
+- 组装/混搭模型进**训练面板**（现只单配方训练；`custom_recipes.pair()` 已备好接口，
+  训练环 `train.py` 还需接受 `custom:<名>` 作为 framework）
 - 四配方**真训练权重**（现在都是 untrained 结构演示，lsb_toy 才是真嵌入）
 - 损失曲线图、多 run 对比、val 集划分
 - scw 物理层（pimog/esmn，numpy 不可微）进训练的 **STE 直通方案**待设计
 - 服务守护化（systemd）；段级 trace 缩略图；画布拖拽/缩放
+- 自定义配方的**段级复用**（现在整网载入后拆回组装台；还没做到"把别人配方里的
+  某一段拣进我的台"）
 - LICENSE 选型（建议 MIT，未放文件）；**旧 fine-grained PAT 应吊销**（曾明文出现在
   对话里，用户已知）
 

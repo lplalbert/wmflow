@@ -26,7 +26,8 @@ class NetSpecModel(Node):
     def INPUT_TYPES(cls):
         return {"required": {
             "framework": (STRING, {"default": "hidden", "choices": [
-                "hidden", "stegastamp", "mbrs", "custom"]}),
+                "hidden", "stegastamp", "mbrs", "custom"],
+                "help": "内置配方名, 或 'custom:<配方名>' 引用自定义配方库"}),
             "spec_json": (STRING, {"default": "{}", "multiline": True,
                                     "help": "framework=custom 时用: "
                                             '{"encoder": {...}, "decoder": {...}}'}),
@@ -36,6 +37,11 @@ class NetSpecModel(Node):
 
     @classmethod
     def VALIDATE_INPUTS(cls, framework, spec_json, **_):
+        if framework.startswith("custom:"):
+            from .custom_recipes import exists
+            if not exists(framework.split(":", 1)[1]):
+                return [f"自定义配方不存在: {framework.split(':', 1)[1]}"]
+            return []
         if framework not in ("hidden", "stegastamp", "mbrs", "custom"):
             return [f"未知框架 {framework}"]
         if framework == "custom":
@@ -52,11 +58,15 @@ class NetSpecModel(Node):
         import json
         from .netspec import NetSpec
         from .recipes import RECIPES
+        from . import custom_recipes as crec
 
-        if framework == "custom":
-            d = json.loads(spec_json)
-            enc, dec = NetSpec(d["encoder"]), NetSpec(d["decoder"])
-            meta = {"framework": "custom"}
+        if framework.startswith("custom:") or framework == "custom":
+            if framework.startswith("custom:"):
+                enc, dec, meta = crec.pair(framework.split(":", 1)[1])
+            else:
+                d = json.loads(spec_json)
+                enc, dec = NetSpec(d["encoder"]), NetSpec(d["decoder"])
+                meta = {"framework": "custom"}
         else:
             kw = {"size": size}
             if msg_len:
@@ -102,7 +112,8 @@ class NetSpecPrompt(Node):
     def INPUT_TYPES(cls):
         return {"required": {
             "framework": (STRING, {"default": "hidden", "choices": [
-                "hidden", "stegastamp", "mbrs", "custom"]}),
+                "hidden", "stegastamp", "mbrs", "custom"],
+                "help": "内置配方名, 或 'custom:<配方名>' 引用自定义配方库"}),
             "spec_json": (STRING, {"default": "{}", "multiline": True}),
             "mode": (STRING, {"default": "describe", "choices": [
                 "describe", "debug", "tune"]}),
@@ -117,9 +128,19 @@ class NetSpecPrompt(Node):
         import json
         from .netspec import NetSpec
         from .recipes import RECIPES, describe_framework
+        from . import custom_recipes as crec
         from . import llm
 
-        if framework != "custom":
+        if framework.startswith("custom:"):
+            enc, dec, meta = crec.pair(framework.split(":", 1)[1])
+            head = [f"# 自定义配方: {meta.get('title', '')}",
+                    f"- 消息长: {enc.inputs['message'][0]}, 输入 {enc.inputs['image']}",
+                    enc.render_prompt("## 以下为 encoder"), "",
+                    dec.render_prompt("## 以下为 decoder")]
+            if mode == "describe":
+                return ("\n".join(head),)
+            spec = enc if mode == "debug" else enc
+        elif framework != "custom":
             kw = {}
             enc, dec, meta = RECIPES[framework](**kw)
             if mode == "describe":
