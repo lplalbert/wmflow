@@ -77,8 +77,9 @@ custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓
 ```bash
 # 服务 (服务器上)
 cd /home/lpl2025/lpl/wmflow
-export WMFLOW_PY=/data/miniconda_dir/envs/lpl/bin/python
 bash scripts/webui.sh start|stop|restart|status 7860
+# 解释器自动挑 (WMFLOW_PY 优先 → /data/miniconda_dir/envs/lpl/bin/python → 系统
+# python3); 系统 python3 没 numpy, 显式 WMFLOW_PY 仍可强制
 
 # 部署流 (改完代码)
 # 本地: git add -A && git commit && git push origin main
@@ -122,6 +123,14 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
     自己写压测脚本时也别用 `ConvertTo-Json` 默认编码直接当 body，要转 UTF-8 字节。
 12. **自定义配方是运行时资产**：`custom_recipes/` 已 gitignore，服务器上攒的配方不会
     随 push 走；要跨端搬用「导出 JSON」，别指望 git。
+13. **噪声层输出必须 C 连续**：通道翻转 `arr[:, :, ::-1]` 是负 stride 视图，直接
+    `torch.from_numpy` 必报 "At least one stride ... is negative"。`_jpg` 已
+    ascontiguousarray 修掉（单独 layer=jpeg 曾必崩，combo 因 np.clip 落了新数组才没
+    暴露）；webui/nodes_netspec 入口也统一兜底，新增层（含 scw 物理层）照此办理。
+    test_smoke 里有 5 层连续性断言守着。
+14. **服务器 git fetch 偶发 `GnuTLS recv error (-110)`**（HTTPS，网络抖动）：重试即通；
+    但重试失败时 `merge` 会误报"已经是最新的"——先 `git rev-parse origin/main` 核对 sha
+    再 merge。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 
