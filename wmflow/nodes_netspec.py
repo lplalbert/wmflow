@@ -81,7 +81,8 @@ class NetSpecModel(Node):
 
         def encode(cover, bits, strength):
             import torch
-            x = torch.from_numpy(cover.transpose(2, 0, 1))[None].float()
+            x = torch.from_numpy(np.ascontiguousarray(
+                cover.transpose(2, 0, 1)))[None].float()
             m = torch.from_numpy(np.asarray(bits, dtype=np.float32))[None]
             with torch.no_grad():
                 y = enc_mod({"image": x, "message": m})[0]
@@ -90,7 +91,8 @@ class NetSpecModel(Node):
 
         def decode(img):
             import torch
-            x = torch.from_numpy(img.transpose(2, 0, 1))[None].float()
+            x = torch.from_numpy(np.ascontiguousarray(
+                img.transpose(2, 0, 1)))[None].float()
             with torch.no_grad():
                 logit = dec_mod({"image": x})[0]
             return (logit > 0.5).cpu().numpy().astype(np.uint8)

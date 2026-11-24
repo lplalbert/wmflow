@@ -37,7 +37,9 @@ def _jpg(img: np.ndarray, rng: np.random.Generator, q=(40, 95)):
     ok, buf = cv2.imencode(".jpg", (img * 255).astype(np.uint8),
                            [cv2.IMWRITE_JPEG_QUALITY, qq])
     out = cv2.imdecode(buf, cv2.IMREAD_COLOR).astype(np.float32) / 255.0
-    return out[:, :, ::-1], {"jpeg_q": qq}
+    # 通道翻转是负 stride 视图: 直接喂 torch.from_numpy 会报
+    # "At least one stride ... is negative", 所以这里就落成连续数组。
+    return np.ascontiguousarray(out[:, :, ::-1]), {"jpeg_q": qq}
 
 
 def _blur(img, rng, k=(3, 9)):

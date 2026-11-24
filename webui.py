@@ -296,7 +296,8 @@ def op_run_demo(d):
 
         def _enc(cover, bits, s):
             import torch
-            x = torch.from_numpy(cover.transpose(2, 0, 1))[None].float()
+            x = torch.from_numpy(np.ascontiguousarray(
+                cover.transpose(2, 0, 1)))[None].float()
             m = torch.from_numpy(bits.astype(np.float32))[None]
             with torch.no_grad():
                 y = eb.as_module().eval()({"image": x, "message": m})[0]
@@ -305,7 +306,8 @@ def op_run_demo(d):
 
         def _dec(img):
             import torch
-            x = torch.from_numpy(img.transpose(2, 0, 1))[None].float()
+            x = torch.from_numpy(np.ascontiguousarray(
+                img.transpose(2, 0, 1)))[None].float()
             with torch.no_grad():
                 logit = db.as_module().eval()({"image": x})[0]
             return (logit > 0.5).cpu().numpy().astype(np.uint8)
@@ -369,8 +371,8 @@ def op_trace(d):
     msg_len = next((v[0] for v in spec.inputs.values() if len(v) == 1), None)
     inp = {}
     if "image" in spec.inputs:
-        inp["image"] = torch.from_numpy(
-            _demo_cover(size).transpose(2, 0, 1))[None].float()
+        inp["image"] = torch.from_numpy(np.ascontiguousarray(
+            _demo_cover(size).transpose(2, 0, 1)))[None].float()
     if msg_len and "message" in spec.inputs:
         rng = np.random.default_rng(0)
         inp["message"] = torch.from_numpy(

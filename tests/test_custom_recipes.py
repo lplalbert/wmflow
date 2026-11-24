@@ -184,6 +184,12 @@ def test_webui_endpoints():
         assert demo["ok"], demo.get("error")
         assert demo["msg_len"] == 30
         assert 0.0 <= demo["nodes"]["metrics"]["ber"] <= 1.0
+        # 单层 jpeg 曾因负 stride 视图喂 torch 而崩, 这里连同 combo 一起守着
+        for layer in ("jpeg", "blur", "combo_builtin"):
+            dl = W.op_run_demo({"framework": "custom", "custom_recipe": "ui_mix",
+                                "strength": 1.0, "seed": 2,
+                                "layer": layer, "preset": "none"})
+            assert dl["ok"], (layer, dl.get("error"))
         dele = W.op_recipe_delete({"name": "ui_mix"})
         assert dele["ok"]
         print("[ok] webui ops: save/list/get/export/import/delete + run_demo(custom_recipe) "

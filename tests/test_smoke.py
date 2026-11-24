@@ -94,6 +94,17 @@ def test_type_check():
     print(f"[ok] type check: 拦截 {len(errs)} 处")
 
 
+def test_layer_contiguous():
+    """内置噪声层输出必须 C 连续 —— 负 stride 视图喂 torch.from_numpy 会炸 (jpeg 层曾中招)。"""
+    from wmflow.nodes_core import BUILTIN_LAYERS
+    img = make_cover(32, 32, seed=5)
+    for name, fn in BUILTIN_LAYERS.items():
+        out, _p = fn(img, np.random.default_rng(0))
+        assert out.flags["C_CONTIGUOUS"], (
+            f"{name} 输出非 C 连续 (负 stride): torch.from_numpy 会报 negative stride")
+    print(f"[ok] attack layers contiguous: {len(BUILTIN_LAYERS)} layers")
+
+
 def test_full_pipeline():
     """smoke_ablation 全图: 嵌入→攻击→提取→度量→报告落盘。"""
     with tempfile.TemporaryDirectory() as td:
@@ -118,5 +129,6 @@ if __name__ == "__main__":
     test_clean_roundtrip()
     test_cache_and_seed()
     test_type_check()
+    test_layer_contiguous()
     test_full_pipeline()
     print("\nALL SMOKE TESTS PASSED")
