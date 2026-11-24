@@ -233,6 +233,7 @@ def op_run_demo(d):
     """全流程真跑: 载体→嵌入→攻击→提取, 逐节点输出可视化 + 指标。"""
     import numpy as np
     d = dict(d)
+    explicit_mix = bool(d.get("enc_spec"))   # 调用方显式给了组装 spec (混搭), 优先于 ckpt 快照
     # 自定义配方归一: 支持 framework='custom:<名>' 与 custom_recipe='<名>' 两种写法
     if not d.get("custom_recipe"):
         fw0 = str(d.get("framework") or "")
@@ -258,7 +259,7 @@ def op_run_demo(d):
     # 预读 ckpt: 训练产出绑定结构快照, 先读出来才能定尺寸 (必须在造载体之前)
     ck = None
     ckpt_path = d.get("ckpt_path")
-    if ckpt_path and not (framework == "lsb_toy" and not d.get("enc_spec")):
+    if ckpt_path and not (framework == "lsb_toy" and not explicit_mix):
         import os
         import torch
         real = os.path.realpath(ckpt_path)
@@ -269,7 +270,7 @@ def op_run_demo(d):
             ck = torch.load(real, map_location="cpu", weights_only=False)
         except Exception as e:
             return {"ok": False, "error": f"ckpt 读取失败: {e}"}
-        if not d.get("enc_spec"):
+        if not explicit_mix:
             size = int(ck.get("size")
                        or NetSpec(ck["spec_enc"]).inputs["image"][1])
 
@@ -282,7 +283,7 @@ def op_run_demo(d):
         trained = True
     else:
         structure_note = None
-        if ck is not None and not d.get("enc_spec"):
+        if ck is not None and not explicit_mix:
             enc = NetSpec(ck["spec_enc"])
             dec = NetSpec(ck["spec_dec"])
             meta = {"framework": ck.get("recipe") or ck.get("framework", "ckpt")}
