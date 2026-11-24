@@ -45,8 +45,8 @@ webui_index.html   # 单页前端: 节点图画布(SVG 贝塞尔连线/类型彩
                    # 我的配方)/训练 + 通用对话框(存配方/导出/导入)
 prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
 scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
-tests/             # test_smoke(7)/test_netspec(9)/test_components(3)/
-                   # test_custom_recipes(6) 四套 25 项
+tests/             # test_smoke(6)/test_netspec(9)/test_components(6)/
+                   # test_custom_recipes(6) 四套 27 项断言输出
 workflows/         # 示例图 JSON
 custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓走)
 ```
