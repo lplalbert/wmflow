@@ -4,9 +4,21 @@
 set -u
 PORT="${2:-7860}"
 DIR="$(cd "$(dirname "$0")/.." && pwd)"
-PY="${WMFLOW_PY:-python3}"
 PIDFILE="/tmp/wmflow_webui.pid"
 LOG="/tmp/wmflow_webui.log"
+
+# 解释器: 显式 WMFLOW_PY 优先; 否则在常见 env 里挑一个真能 import numpy+torch 的
+# (服务器系统 python3 没 numpy, 踩过一次 —— 启动失败只留一行 ModuleNotFoundError)。
+pick_py() {
+  for c in "${WMFLOW_PY:-}" /data/miniconda_dir/envs/lpl/bin/python \
+           "$HOME/miniconda3/envs/lpl/bin/python" python3; do
+    [ -z "$c" ] && continue
+    command -v "$c" >/dev/null 2>&1 || continue
+    "$c" -c "import numpy, torch" >/dev/null 2>&1 && { echo "$c"; return 0; }
+  done
+  echo python3
+}
+PY="$(pick_py)"
 
 case "${1:-status}" in
   start)
@@ -18,9 +30,9 @@ case "${1:-status}" in
     echo $! > "$PIDFILE"
     sleep 2
     if kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
-      echo "已启动 pid $(cat "$PIDFILE") 端口 $PORT"
+      echo "已启动 pid $(cat "$PIDFILE") 端口 $PORT (python: $PY)"
     else
-      echo "启动失败, 看 $LOG"; tail -5 "$LOG"; exit 1
+      echo "启动失败 (python: $PY), 看 $LOG"; tail -5 "$LOG"; exit 1
     fi
     ;;
   stop)
