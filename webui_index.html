@@ -209,8 +209,8 @@
     <option value="encoder">encoder (image+msg → 水印图)</option>
     <option value="decoder">decoder (image → logits)</option>
   </select></label>
-  <label>msg_len <input id="benchMsgLen" type="number" value="30" style="width:60px" onchange="benchInvalidate()"></label>
-  <label>size <input id="benchSize" type="number" value="128" step="32" style="width:64px" onchange="benchInvalidate()"></label>
+  <label>msg_len <input id="benchMsgLen" type="number" value="30" style="width:60px" onchange="benchInvalidate()" oninput="benchInvalidate()"></label>
+  <label>size <input id="benchSize" type="number" value="128" step="32" style="width:64px" onchange="benchInvalidate()" oninput="benchInvalidate()"></label>
   <button class="primary" onclick="buildBench()">🔧 构建校验</button>
   <button onclick="runTrace()">▶ 逐积木追踪</button>
   <button onclick="benchClear()">清空组装台</button>
@@ -365,6 +365,7 @@ let RECIPES=null, MODULES=null;
 let view='pipe', graph={nodes:[],links:[]}, blocksSpec=null, editSel=null, mixSpec=null;
 let COMPONENTS=null, benchSegs=[];
 let benchSide = {};          // 组装台已构建的两侧 NetSpec (encoder/decoder), 存配方用
+let benchSideVer = -1;       // benchSide 对应哪一版组装台状态 (存盘前最后一道核对)
 let benchVer = 0;            // 组装台状态版本: 异步构建返回时用来丢弃过期响应
 let CUSTOM = [];             // 自定义配方列表
 
@@ -657,13 +658,15 @@ function renderBenchStrip() {
 async function buildBench() {
   const ver = ++benchVer;                        // 本次构建对应的台子版本
   const segSnap = JSON.stringify(benchSegs);
+  const pSnap = [$('benchMode').value, +$('benchMsgLen').value, +$('benchSize').value];
   const r = await api('/api/assemble', {
-    mode: $('benchMode').value,
-    msg_len: +$('benchMsgLen').value,
-    size: +$('benchSize').value,
+    mode: pSnap[0], msg_len: pSnap[1], size: pSnap[2],
     segments: benchSegs});
   // 响应在途时台子/参数被改过 → 丢弃过期结果, 别把旧 spec 写回缓存
-  if (ver !== benchVer || JSON.stringify(benchSegs) !== segSnap) return null;
+  if (ver !== benchVer || JSON.stringify(benchSegs) !== segSnap ||
+      $('benchMode').value !== pSnap[0] ||
+      +$('benchMsgLen').value !== pSnap[1] ||
+      +$('benchSize').value !== pSnap[2]) return null;
   if (!r.ok) {
     const part = $('benchMode').value === 'encoder' ? 'encoder' : 'decoder';
     delete benchSide[part];        // 构建失败: 该侧缓存作废, 别把旧 spec 存成配方
@@ -673,6 +676,7 @@ async function buildBench() {
   }
   blocksSpec = r.spec;
   benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;
+  benchSideVer = benchVer;        // 标记缓存对应的台子版本
   drawBlocks({});
   $('blockStatus').innerHTML = `✓ 构建通过 · 输出 ${JSON.stringify(r.report.out_shape)}` +
     (r.report.auto_adapters.length
@@ -799,6 +803,7 @@ async function applyEdit() {
   benchVer++; benchSide = {};      // 结构变了: 在途构建作废, 缓存重写
   blocksSpec = r.spec;
   benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;
+  benchSideVer = benchVer;        // 标记缓存对应的台子版本
   drawBlocks({});
   $('editStatus').textContent = '✓ 已套用, 自动适配完成';
   $('editStatus').className = 'status ok';
@@ -854,7 +859,7 @@ async function loadCustomSide(side, name) {
   if (isEnc) $('benchMsgLen').value = spec.input.message[0];
   blocksSpec = spec;
   benchSide = {}; benchVer++;            // 整台被这条配方替换, 只有载入的这侧算数
-  benchSide[part] = spec;
+  benchSide[part] = spec; benchSideVer = benchVer;
   benchSegs = JSON.parse(JSON.stringify((r.segments || {})[part] || []));
   renderBenchStrip(); drawBlocks({});
   st.innerHTML = `✓ 已载入「${esc(r.recipe.title)}」的 <b>${part}</b> 侧 (段已拆回组装台, 可继续拣段/追踪)`;
@@ -908,6 +913,13 @@ function sidePayload(v) {
 async function doSaveRecipe() {
   const enc = sidePayload($('svEnc').value);
   const dec = sidePayload($('svDec').value);
+  // 最后一道核对: 组装台侧的缓存必须对应当前这版台子, 否则拒绝存盘
+  if ((enc.kind === 'bench' || dec.kind === 'bench') && benchSideVer !== benchVer) {
+    const st = $('dlgStatus');
+    st.textContent = '组装台在存盘前已变更, 请重新「构建校验」；或把该侧换成内置/已存配方';
+    st.className = 'status err';
+    return;
+  }
   if (enc.kind === 'bench') enc.spec = benchSide.encoder;
   if (dec.kind === 'bench') dec.spec = benchSide.decoder;
   const r = await api('/api/recipe_save', {
@@ -1139,13 +1151,20 @@ async function genPrompt() {
 function copyPrompt() { navigator.clipboard.writeText($('prompt').value); }
 
 async function applyReply() {
+  const ver = benchVer, specAtRequest = blocksSpec;
   const r = await api('/api/apply_reply',
     {spec: blocksSpec, reply: $('reply').value});
   const s = $('replyStatus');
   if (!r.ok) { s.textContent = '失败: '+r.error; s.className='status err'; return; }
+  if (ver !== benchVer || blocksSpec !== specAtRequest) {   // 在途时台子被改 → 丢弃
+    s.textContent = '组装台已变更, 本次补丁丢弃, 请重试';
+    s.className = 'status err';
+    return;
+  }
   benchVer++; benchSide = {};      // 结构变了: 在途构建作废, 缓存重写
   blocksSpec = r.spec;
   benchSide['message' in r.spec.input ? 'encoder' : 'decoder'] = r.spec;
+  benchSideVer = benchVer;        // 标记缓存对应的台子版本
   drawBlocks({});
   s.textContent = '✓ 补丁已套用'; s.className='status ok';
   $('prompt').value = r.prompt;
