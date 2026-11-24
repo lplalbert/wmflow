@@ -44,7 +44,8 @@ case "${1:-status}" in
     fi
     ;;
   restart)
-    "$0" stop "$PORT"; sleep 1; "$0" start "$PORT" ;;
+    # 用 bash 显式调起, 不依赖文件可执行位 (git 不保留 exec 位, 曾报"权限不够")
+    bash "$0" stop "$PORT"; sleep 1; bash "$0" start "$PORT" ;;
   status)
     if [ -f "$PIDFILE" ] && kill -0 "$(cat "$PIDFILE")" 2>/dev/null; then
       echo "运行中 pid $(cat "$PIDFILE")"; curl -s -m 5 "http://127.0.0.1:$PORT/api/modules" | head -c 60
