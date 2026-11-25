@@ -48,11 +48,11 @@ wmflow/webui_index.html  # 单页前端 (在包内, Wheel 安装也随包走): �
 prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
 scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
 scripts/make_demo_cover.py  # 生成 demo/cover.png (demo/ 不进仓, 让快速开始开箱即跑)
-scripts/test_all.sh         # 7 套测试一键跑 (与 CI 同一入口)
+scripts/test_all.sh         # 8 套测试一键跑 (与 CI 同一入口)
 tests/             # test_smoke(6)/test_netspec(9)/test_components(6)/
                    # test_custom_recipes(12)/test_train_custom(8)/
-                   # test_train_val(2)/test_webui_auth(1) 七套
-                   # e2e_webui.py: WebUI 端到端 34 项 (可选, 需 Playwright)
+                   # test_train_val(2)/test_webui_auth(1)/test_runs_list(1) 八套
+                   # e2e_webui.py: WebUI 端到端 35 项 (可选, 需 Playwright)
 workflows/         # 示例图 JSON
 custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓走)
 ```
@@ -118,6 +118,14 @@ custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓
     Wheel 安装后首页不再丢资源；③ CI e2e 去掉 `continue-on-error` 改为合并
     门禁，并设 `WMFLOW_E2E_TOKEN` 让 token 鉴权路径（`/?token=` 首页、401）
     进 CI，token 首页 404 这类回归不再被掩盖。
+15. **多 run 对比（本轮）**：① 训练每个 epoch 末把元信息 + 逐 epoch 指标原子写入
+    `run_dir/history.json`（tmp+replace，finished 标记），结束再写一次定稿；
+    ② 新增 `/api/runs_list`：扫描 `runs/` 汇总各 run（新 run 带完整曲线数组；
+    旧 run 无 history.json 时从最新 ckpt 抠框架/尺寸/epoch 摘要，weights_only +
+    按 (路径,mtime) 进程内缓存，只出摘要不出曲线）；③ 训练页新增「run 对比」卡片：
+    多选 run → 叠加 loss/BER 曲线（颜色区分，loss 细线按全局最大归一、BER 粗线右轴
+    0..1）+ 指标对比表（final_ber 标注 val/train），旧 run 灰置；训练从运行→结束
+    瞬间自动刷新列表。新测试 `tests/test_runs_list.py`，e2e 增 1 项（35 项）。
 
 ## 4. 操作手册
 
@@ -240,11 +248,17 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 32. **`webui_index.html` 在 `wmflow/` 包内**：前端单文件已从仓库根移入包内
     （pyproject package-data 声明），`webui.py` 统一经 `read_index_html()` 读取——
     勿在仓库根重建同名文件或把路径硬编码回根目录，否则 Wheel 安装后首页 500。
+33. **run 指标只随 `history.json` 走，旧 run 自动降级**：训练指标按 run 落盘
+    `runs/<run>/history.json`（原子写 tmp+replace，别直接 open('w') 防读方拿到
+    半截文件）；`/api/runs_list` 对没有该文件的旧 run 只从最新 ckpt 抠摘要
+    （weights_only + 缓存），前端灰置且不出曲线——新增对比类功能时保持这个
+    降级约定，别假设所有 run 都有曲线数据。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 
 - 四配方**真训练权重**（现在都是 untrained 结构演示，lsb_toy 才是真嵌入）
-- 多 run 对比（loss 曲线/val 集划分已做，见 §3 #12；还差跨 run 并列对比）
+- ~~多 run 对比~~（已做：history.json 落盘 + runs_list + 前端叠加曲线/表格，
+  见 §3 #15；进阶可做按 run 的 ckpt 一键回灌比较）
 - 7860 **访问控制**（无鉴权，见 §5 #10）；建议反向代理单用户认证 + 限公网入口
 - scw 物理层（pimog/esmn，numpy 不可微）进训练的 **STE 直通方案**待设计
 - 服务守护化（systemd）；段级 trace 缩略图；画布拖拽/缩放

@@ -106,10 +106,10 @@ python run.py workflows/smoke_ablation.json --out out/smoke
 python run.py workflows/smoke_ablation.json --set 5.layer=noise --set 6.preset=jpeg75
 python run.py workflows/smoke_ablation.json --validate-only
 
-# 5) 一键跑全部 7 套测试（与 CI 同一入口）
+# 5) 一键跑全部 8 套测试（与 CI 同一入口）
 bash scripts/test_all.sh
 
-# 6) 可选：WebUI 端到端点测（34 项，需 Playwright + chromium）
+# 6) 可选：WebUI 端到端点测（35 项，需 Playwright + chromium）
 python -m pip install playwright && playwright install chromium
 python tests/e2e_webui.py
 # 特殊环境（缺 libatomic / 自带 chromium）：
@@ -149,3 +149,4 @@ python webui.py --port 7860 --token <令牌>               # 或设 WMFLOW_WEBUI
 - [x] WebUI 端到端：34 项点测（5 框架 / 攻击层 / 转码 / 组件库 / 逐积木追踪 / 节点编辑 / 存配方 / 自定义直跑 / LLM 三模式 / 训练面板），`tests/e2e_webui.py`（可选，需 Playwright）
 - [x] 访问控制与工程：`--token` / `WMFLOW_WEBUI_TOKEN` 的 `/api/*` 鉴权、`WMFLOW_FS_ROOTS` 可配、CI e2e 合并门禁（带 token 鉴权路径）
 - [x] 工程收口补漏：ckpt 加载 `weights_only=True`（信任边界）、`webui_index.html` 移入包内（Wheel 安装后首页可用）
+- [x] 多 run 对比：训练指标落盘 `runs/<run>/history.json`、`/api/runs_list` 跨 run 汇总（旧 run 自动降级）、训练页叠加 loss/BER 曲线 + 指标对比表

@@ -14,6 +14,7 @@ TESTS=(
   tests/test_train_custom.py
   tests/test_train_val.py
   tests/test_webui_auth.py
+  tests/test_runs_list.py
 )
 
 fail=0

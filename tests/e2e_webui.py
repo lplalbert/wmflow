@@ -345,6 +345,21 @@ def _run_tests(base, token=""):
             return f"tProg={page.locator('#tProg').inner_text()!r}"
         step("训练状态轮询", _train_status)
 
+        def _train_compare():
+            page.wait_for_function(
+                "() => [...document.querySelectorAll('#cmpRuns label')]"
+                ".some(l => l.textContent.includes('_e2e_cmp_1125'))",
+                timeout=20000)
+            page.locator("#cmpRuns label", has_text="_e2e_cmp_1125"
+                         ).locator("input").check()
+            page.wait_for_function(
+                "() => document.querySelectorAll('#cmpChart path').length >= 1 "
+                "&& document.querySelectorAll('#cmpTable tr').length === 2",
+                timeout=10000)
+            return (f"paths={page.locator('#cmpChart path').count()}, "
+                    f"legend={page.locator('#cmpLegend').inner_text()[:60]!r}")
+        step("run 对比面板 (勾选叠加曲线+表格)", _train_compare)
+
         def _back_pipe():
             page.click("#view-pipe")
             page.wait_for_timeout(500)
@@ -390,6 +405,26 @@ def main():
     token = os.environ.get("WMFLOW_E2E_TOKEN", "")
     port = _free_port()
     base = f"http://127.0.0.1:{port}"
+    # run 对比面板需要至少一个带 history.json 的 run (CI 的 runs/ 是空的)
+    cmp_dir = REPO / "runs" / "_e2e_cmp_1125"
+    try:
+        cmp_dir.mkdir(parents=True, exist_ok=True)
+        import json as _json
+        (cmp_dir / "history.json").write_text(_json.dumps({
+            "framework": "hidden", "recipe": "hidden", "size": 48,
+            "msg_len": 30, "dataset_path": "/tmp/ds", "n_images": 10,
+            "attacks": ["none"], "epochs": 2, "batch_size": 4, "lr": 1e-3,
+            "strength": 1.0, "val_ratio": 0.1, "seed": 0,
+            "started_at": 1732500000.0, "updated_at": 1732500060.0,
+            "finished": True,
+            "history": [
+                {"epoch": 1, "loss": 0.9, "loss_img": 0.5, "loss_msg": 0.4,
+                 "ber": 0.4, "val_n": 1, "train_n": 9, "val_ber": 0.4},
+                {"epoch": 2, "loss": 0.7, "loss_img": 0.4, "loss_msg": 0.3,
+                 "ber": 0.3, "val_n": 1, "train_n": 9, "val_ber": 0.3},
+            ]}), encoding="utf-8")
+    except Exception as e:
+        print(f"[warn] 无法构造对比 run: {e}")
     cmd = [sys.executable, "webui.py", "--host", "127.0.0.1", "--port", str(port)]
     if token:
         cmd += ["--token", token]
@@ -406,6 +441,11 @@ def main():
             proc.wait(timeout=5)
         except Exception:
             proc.kill()
+        try:
+            (cmp_dir / "history.json").unlink(missing_ok=True)
+            cmp_dir.rmdir()
+        except Exception:
+            pass
 
 
 if __name__ == "__main__":

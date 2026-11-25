@@ -251,6 +251,15 @@ class TrainState:
 STATE = TrainState()
 
 
+def save_run_history(run_dir: str, meta: Dict[str, Any]):
+    """训练元信息 + 逐 epoch 指标原子写入 run_dir/history.json (跨 run 对比用)。"""
+    import json
+    tmp = os.path.join(run_dir, "history.json.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    os.replace(tmp, os.path.join(run_dir, "history.json"))
+
+
 # ---------------------------------------------------------------- 训练环
 def train(config: Dict[str, Any]):
     import cv2
@@ -367,6 +376,21 @@ def train(config: Dict[str, Any]):
     run_dir = os.path.join(RUNS_DIR, run_name)
     os.makedirs(run_dir, exist_ok=True)
 
+    def _write_hist(finished: bool):
+        save_run_history(run_dir, {
+            "framework": fw, "recipe": fw, "size": int(config["size"]),
+            "msg_len": int(msg_len),
+            "dataset_path": str(config.get("dataset_path", "")),
+            "n_images": int(config.get("n_images", 0)),
+            "attacks": attacks, "epochs": epochs,
+            "batch_size": bs, "lr": float(config.get("lr", 1e-3)),
+            "strength": strength, "w_img": w_img, "w_msg": w_msg,
+            "val_ratio": val_ratio, "seed": int(config.get("seed", 0)),
+            "started_at": st.started_at or time.time(),
+            "updated_at": time.time(), "finished": bool(finished),
+            "history": list(st.history),
+        })
+
     rng = np.random.default_rng(int(config.get("seed", 0)))
     st.say(f"开训: {epochs} epoch × {steps_per} step, bs={bs}, "
            f"lr={config.get('lr', 1e-3)}, 攻击={attacks}")
@@ -422,6 +446,7 @@ def train(config: Dict[str, Any]):
         st.say(f"epoch {ep}: loss={rec['loss']} img={rec['loss_img']} "
                f"msg={rec['loss_msg']} {_bk}={rec[_bk]}"
                + ("" if n_val else " (训练集)"))
+        _write_hist(False)
         # 预览图 (首样本)
         with torch.no_grad():
             one = data_t[:1]
@@ -447,6 +472,7 @@ def train(config: Dict[str, Any]):
                     "config": config}, ckpt)
         st.ckpts.append(ckpt)
 
+    _write_hist(True)
     st.say("训练结束" + (", 已提前停止" if st.stop_flag else ""))
     return run_dir
 

@@ -527,6 +527,77 @@ def op_runs(_d):
     return {"runs": out}
 
 
+_LEGACY_META: dict = {}
+
+
+def _legacy_ckpt_meta(run_dir: str, cks: list):
+    """旧 run (无 history.json): 从最新 ckpt 抠框架/尺寸/消息长等摘要。
+    weights_only=True 加载, 按 (路径, mtime) 进程内缓存避免每次请求都读大文件。"""
+    import os
+    if not cks:
+        return None
+    newest = os.path.join(run_dir, cks[-1])
+    try:
+        mt = os.path.getmtime(newest)
+    except OSError:
+        return None
+    cached = _LEGACY_META.get(newest)
+    if cached and cached.get("_mtime") == mt:
+        return {k: v for k, v in cached.items() if k != "_mtime"}
+    try:
+        import torch
+        ck = torch.load(newest, map_location="cpu", weights_only=True)
+        cfg = ck.get("config") or {}
+        meta = {"framework": ck.get("framework"), "size": ck.get("size"),
+                "msg_len": ck.get("msg_len"), "epochs": ck.get("epoch"),
+                "attacks": cfg.get("attacks"),
+                "dataset_path": cfg.get("dataset_path"), "_mtime": mt}
+        _LEGACY_META[newest] = meta
+        return {k: v for k, v in meta.items() if k != "_mtime"}
+    except Exception:
+        return None
+
+
+def op_runs_list(_d):
+    """跨 run 对比: 扫描 runs/, 汇总各 run 的 history.json (含逐 epoch 曲线数据)
+    与 ckpt 数; 旧 run 降级为摘要 (无曲线)。"""
+    from wmflow.train import RUNS_DIR
+    import os
+    out = []
+    if not os.path.isdir(RUNS_DIR):
+        return {"runs": out}
+    for name in sorted(os.listdir(RUNS_DIR), reverse=True):
+        rd = os.path.join(RUNS_DIR, name)
+        if not os.path.isdir(rd):
+            continue
+        try:
+            cks = sorted(f for f in os.listdir(rd) if f.endswith(".pt"))
+        except OSError:
+            continue
+        rec = {"name": name, "n_ckpts": len(cks),
+               "mtime": os.path.getmtime(rd), "history": None}
+        hj = os.path.join(rd, "history.json")
+        if os.path.isfile(hj):
+            try:
+                with open(hj, "r", encoding="utf-8") as f:
+                    h = json.load(f)
+                for k in ("framework", "recipe", "size", "msg_len",
+                          "dataset_path", "n_images", "attacks", "epochs",
+                          "batch_size", "lr", "strength", "val_ratio", "seed",
+                          "started_at", "updated_at", "finished"):
+                    rec[k] = h.get(k)
+                rec["history"] = h.get("history") or []
+            except Exception as e:
+                rec["error"] = f"history.json 读取失败: {e}"
+        else:
+            rec["legacy"] = True
+            meta = _legacy_ckpt_meta(rd, cks)
+            if meta:
+                rec.update(meta)
+        out.append(rec)
+    return {"runs": out}
+
+
 def op_components(_d):
     """组件库: 各框架的积木段货架 + 自由单积木 + 我的配方。"""
     from wmflow.components import segment_spec, single_module_segments
@@ -670,7 +741,7 @@ OPS = {
     "swap": op_swap, "prompt": op_prompt, "apply_reply": op_apply_reply,
     "forward": op_forward, "run_demo": op_run_demo, "trace": op_trace,
     "fs": op_fs, "train_start": op_train_start, "train_status": op_train_status,
-    "train_stop": op_train_stop, "runs": op_runs,
+    "train_stop": op_train_stop, "runs": op_runs, "runs_list": op_runs_list,
     "components": op_components, "assemble": op_assemble,
     "recipe_save": op_recipe_save, "recipe_list": op_recipe_list,
     "recipe_get": op_recipe_get, "recipe_delete": op_recipe_delete,
