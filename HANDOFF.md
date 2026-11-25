@@ -47,9 +47,10 @@ webui_index.html   # 单页前端: 节点图画布(SVG 贝塞尔连线/类型彩
 prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
 scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
 scripts/make_demo_cover.py  # 生成 demo/cover.png (demo/ 不进仓, 让快速开始开箱即跑)
-scripts/test_all.sh         # 5 套测试一键跑 (与 CI 同一入口)
+scripts/test_all.sh         # 7 套测试一键跑 (与 CI 同一入口)
 tests/             # test_smoke(6)/test_netspec(9)/test_components(6)/
-                   # test_custom_recipes(12)/test_train_custom(8) 五套
+                   # test_custom_recipes(12)/test_train_custom(8)/
+                   # test_train_val(2)/test_webui_auth(1) 七套
                    # e2e_webui.py: WebUI 端到端 34 项 (可选, 需 Playwright)
 workflows/         # 示例图 JSON
 custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓走)
@@ -100,6 +101,15 @@ custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓
    BER 改在验证集上算（判决口径仍是 `logit>0`），history 新增 `val_ber`/`val_n`（`ber`
    字段保留兼容、同值）。训练面板加 `val_ratio` 输入；loss/BER 卡上方加 SVG 双轴曲线
    （loss 按 max 归一、BER 右轴 0..1，旧记录 `??ber` 回落），随轮询增量重绘。
+13. **P0 修复（本轮，三端统一后 Codex 评审暴露）**：① `/?token=...` 首页 404 修复
+    （`do_GET` 先剥 query 再匹配路径）；② 验证前 `enc.eval()/dec.eval()`（含 BatchNorm
+    的网络验证前向不得更新 running stats），验证用**固定消息 + 固定攻击随机流**
+    （seed+999 派生，跨 epoch 可比），评完切回 `train()`；③ 无独立验证集（`n<10` 或
+    `val_ratio=0`）时指标记 `train_ber` 而非 `val_ber`（避免拿训练集指标选模），
+    history 补 `train_n`/`val_n`；④ `FS_ROOTS` 白名单同样约束「启动训练」的
+    `dataset_path`（此前只挡目录浏览，可绕过读任意目录）；`val_ratio` 限定 `[0,1)`；
+    ⑤ `load_dataset` 跳过坏图后同步过滤 `files`，保证图与文件名一一对应。
+    新增回归测试 `tests/test_webui_auth.py`、`tests/test_train_val.py`。
 
 ## 4. 操作手册
 
@@ -121,7 +131,8 @@ WMFLOW_WEBUI_TOKEN=secret bash scripts/webui.sh start 7860
 #         bash scripts/webui.sh restart 7860   # fetch 与 merge 分开跑!
 
 # 测试
-python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_components.py && python tests/test_custom_recipes.py && python tests/test_train_custom.py
+python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_components.py && python tests/test_custom_recipes.py && python tests/test_train_custom.py && python tests/test_train_val.py && python tests/test_webui_auth.py
+# 或直接: bash scripts/test_all.sh
 ```
 
 - 自定义配方用法：组装台搭好 →「💾 存为配方」（两侧来源可各选）→ 流水线「框架」下拉
@@ -205,6 +216,16 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 27. **`FS_ROOTS` 可能为空**：`WMFLOW_FS_ROOTS` 指向的目录都不存在时，`op_fs` 返回空
     `roots: []`。前端必须判 `r.roots.length`，否则会把 `undefined` 当路径递归调用
     `fsScan`（已修）。
+28. **`do_GET` 匹配路径前要先剥 `?query`**：`self.path in ("/", ...)` 在访问
+    `/?token=xxx` 时 path 是 `/?token=xxx`，会落到 404——token 鉴权下文档/e2e 的
+    `/?token=` 入口会打不开。先 `path = self.path.split("?",1)[0]` 再匹配。
+29. **验证必须 eval() 且固定随机流**：训练默认 `train()`，含 BatchNorm 的模型若直接在
+    训练态跑验证，会更新 running stats；且验证消息/攻击若每轮随机，`val_ber` 跨 epoch
+    不可比。做法：验证前 `enc.eval()/dec.eval()` + 固定 `val_bits` + 每次用固定种子
+    重建攻击 rng，评完切回 `train()`。无独立验证集时记 `train_ber`，别混作 `val_ber`。
+30. **`FS_ROOTS` 要同时挡住「启动训练」**：只在校验目录浏览时用白名单不够，
+    `op_train_start` 的 `dataset_path` 也要做同样的 realpath 前缀校验，否则可绕过白名单
+    让服务器读任意目录。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 

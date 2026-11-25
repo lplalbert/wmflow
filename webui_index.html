@@ -1156,7 +1156,7 @@ function drawCurves(hist) {
   const lossPts = hist.map((x, i) =>
     [xs(i), H - P - Math.min(+x.loss || 0, maxLoss) / maxLoss * ih]);
   const lossPath = 'M' + lossPts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('L');
-  const berKey = x => (x.val_ber ?? x.ber);
+  const berKey = x => (x.val_ber ?? x.train_ber ?? x.ber);
   const berPts = hist.map((x, i) => [xs(i), yb(+berKey(x) || 0)]);
   const berPath = 'M' + berPts.map(p => p[0].toFixed(1) + ',' + p[1].toFixed(1)).join('L');
   const dots = berPts.map(p =>
@@ -1185,7 +1185,7 @@ async function trainPoll() {
   h.innerHTML = '<tr><th>ep</th><th>loss</th><th>img</th><th>msg</th><th>val_ber</th></tr>' +
     s.history.map(x => `<tr><td>${esc(x.epoch)}</td><td>${esc(x.loss)}</td>
       <td>${esc(x.loss_img)}</td><td>${esc(x.loss_msg)}</td>
-      <td style="color:${(x.val_ber??x.ber)<0.1?'var(--ok)':'var(--warn)'}">${esc(x.val_ber??x.ber)}</td></tr>`).join('');
+      <td style="color:${(x.val_ber??x.train_ber??x.ber)<0.1?'var(--ok)':'var(--warn)'}">${esc(x.val_ber??x.train_ber??x.ber)}</td></tr>`).join('');
   drawCurves(s.history);
   if (s.previews.cover) {
     $('tPrev').innerHTML = ['cover','watermarked','attacked'].map(k =>

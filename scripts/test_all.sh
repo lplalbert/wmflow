@@ -12,6 +12,8 @@ TESTS=(
   tests/test_components.py
   tests/test_custom_recipes.py
   tests/test_train_custom.py
+  tests/test_train_val.py
+  tests/test_webui_auth.py
 )
 
 fail=0

@@ -200,15 +200,17 @@ def load_dataset(path: str, n: int, size: int, seed: int):
         idx = rng.choice(len(files), n, replace=False)
         files = sorted(files[i] for i in idx)
     imgs = []
+    kept = []
     for f in files:
         img = cv2.imread(f, cv2.IMREAD_COLOR)
         if img is None:
             continue
         img = cv2.resize(img, (size, size))
         imgs.append(img[:, :, ::-1].astype(np.float32) / 255.0)
+        kept.append(f)
     if not imgs:
         raise ValueError("没有可解码的图片")
-    return np.stack(imgs), files
+    return np.stack(imgs), kept
 
 
 # ---------------------------------------------------------------- 训练状态
@@ -322,8 +324,11 @@ def train(config: Dict[str, Any]):
     n = data.shape[0]
     data_t = torch.from_numpy(data).permute(0, 3, 1, 2).to(device)
 
-    # 验证集划分: 默认 10%, 太小 (n<10) 或 val_ratio<=0 时退回全量评估
+    # 验证集划分: 默认 10%, 太小 (n<10) 或 val_ratio=0 时退回「全量(训练集)评估」,
+    # 此时指标记 train_ber 而不是 val_ber, 避免把训练集指标误当验证指标来选模。
     val_ratio = float(config.get("val_ratio", 0.1))
+    if not (0.0 <= val_ratio < 1.0):
+        raise ValueError(f"val_ratio 须在 [0,1) 区间, 当前 {val_ratio}")
     n_val = max(1, int(n * val_ratio)) if val_ratio > 0 and n >= 10 else 0
     if n_val:
         split_rng = np.random.default_rng(int(config.get("seed", 0)) + 1)
@@ -336,9 +341,16 @@ def train(config: Dict[str, Any]):
         st.say(f"验证集: {n_val} 张 ({val_ratio:.0%}), 训练 {n} 张")
     else:
         val_t = data_t
-        st.say("验证集: 未划分 (样本过少或 val_ratio=0), epoch 末按全量评估")
+        st.say("验证集: 未划分 (样本过少或 val_ratio=0), epoch 末按训练集全量评估 (记 train_ber)")
 
     msg_len = enc_spec.inputs["message"][0]
+    # 固定验证消息与验证攻击随机流 (每 epoch 相同), 让 val_ber 跨 epoch 可比;
+    # 验证前切 eval() 关掉 BatchNorm 训练态, 评完再切回 train()。
+    val_seed = int(config.get("seed", 0)) + 999
+    _vg = torch.Generator(device=device)
+    _vg.manual_seed(val_seed)
+    val_bits = (torch.rand(val_t.shape[0], msg_len, device=device,
+                           generator=_vg) > 0.5).float()
     opt = torch.optim.Adam(
         list(enc.parameters()) + list(dec.parameters()),
         lr=float(config.get("lr", 1e-3)))
@@ -386,25 +398,30 @@ def train(config: Dict[str, Any]):
                                 "total_steps": steps_per})
         if st.stop_flag:
             break
-        # epoch 末 BER (攻击后, 在验证集上; 无 val 时为全量)
+        # epoch 末 BER (攻击后): 切 eval() + 固定验证消息/攻击随机流, 结果跨 epoch 可比。
+        enc.eval()
+        dec.eval()
         with torch.no_grad():
             n_val_eval = val_t.shape[0]
-            bits_v = (torch.rand(n_val_eval, msg_len, device=device) > 0.5).float()
             emb_v = (1 - strength) * val_t + strength * enc(
-                {"image": val_t, "message": bits_v})
-            atk_v, _ = apply_attacks(emb_v, attacks, rng)
+                {"image": val_t, "message": val_bits})
+            atk_v, _ = apply_attacks(emb_v, attacks,
+                                     np.random.default_rng(val_seed))
             logit_v = dec({"image": atk_v})
             # bit_head 出 logits, BCEWithLogits 的判决边界是 0 (不是 0.5)
-            ber = float(((logit_v > 0).float() != bits_v).float().mean())
+            ber = float(((logit_v > 0).float() != val_bits).float().mean())
+        enc.train()
+        dec.train()
         rec = {"epoch": ep, "loss": round(ep_loss / steps_per, 5),
                "loss_img": round(ep_img / steps_per, 5),
                "loss_msg": round(ep_msg / steps_per, 5),
-               "ber": round(ber, 4), "val_ber": round(ber, 4),
-               "val_n": n_val_eval}
+               "ber": round(ber, 4), "val_n": n_val_eval, "train_n": n}
+        _bk = "val_ber" if n_val else "train_ber"
+        rec[_bk] = round(ber, 4)
         st.history.append(rec)
         st.say(f"epoch {ep}: loss={rec['loss']} img={rec['loss_img']} "
-               f"msg={rec['loss_msg']} val_ber={rec['val_ber']}"
-               + ("" if n_val else " (全量)"))
+               f"msg={rec['loss_msg']} {_bk}={rec[_bk]}"
+               + ("" if n_val else " (训练集)"))
         # 预览图 (首样本)
         with torch.no_grad():
             one = data_t[:1]

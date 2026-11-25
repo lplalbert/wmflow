@@ -462,8 +462,28 @@ def op_fs(d):
 
 
 def op_train_start(d):
+    """启动训练。数据集路径必须落在 FS_ROOTS 白名单内 (与目录浏览同一约束,
+    否则可绕过白名单让服务器读任意目录); 顺带校验 val_ratio 合法性。"""
     from wmflow.train import start_training, ATTACKS
+    import os
     cfg = dict(d)
+    dp = str(cfg.get("dataset_path", "") or "")
+    if not dp:
+        return {"ok": False, "error": "缺数据集路径 dataset_path"}
+    real = os.path.realpath(dp)
+    roots = [os.path.realpath(r) for r in FS_ROOTS]
+    if not any(real == r or real.startswith(r + os.sep) for r in roots):
+        return {"ok": False, "error": f"数据集路径须在 {FS_ROOTS} 之下"}
+    if not os.path.isdir(real):
+        return {"ok": False, "error": f"数据集目录不存在: {real}"}
+    try:
+        vr = float(cfg.get("val_ratio", 0.1))
+    except (TypeError, ValueError):
+        return {"ok": False, "error": "val_ratio 必须是数字"}
+    if not (0.0 <= vr < 1.0):
+        return {"ok": False, "error": f"val_ratio 须在 [0,1) 区间, 当前 {vr}"}
+    cfg["val_ratio"] = vr
+    cfg["dataset_path"] = real
     att = [a for a in cfg.get("attacks", []) if a in ATTACKS]
     cfg["attacks"] = att or ["combo"]
     return {"ok": True, "result": start_training(cfg)}
@@ -671,16 +691,19 @@ class Handler(BaseHTTPRequestHandler):
                          "error": "未授权: 请在 URL 加 ?token=... 或在请求头带 X-Wmflow-Token"})
 
     def do_GET(self):
-        if self.path in ("/", "/index.html"):
+        # 先剥掉 ?query 再匹配路径: 否则 `/?token=...` 这种带参首页会落到 404
+        # (token 鉴权模式下文档/e2e 都用 `/?token=xxx` 打开页面)。
+        path = self.path.split("?", 1)[0]
+        if path in ("/", "/index.html"):
             self._send(200, (ROOT / "webui_index.html").read_bytes(),
                        "text/html; charset=utf-8")
-        elif self.path == "/favicon.ico":
+        elif path == "/favicon.ico":
             self._send(204, b"")
-        elif self.path.startswith("/api/"):
+        elif path.startswith("/api/"):
             if not self._authorized():
                 self._deny()
                 return
-            op = self.path[len("/api/"):].split("?")[0]
+            op = path[len("/api/"):]
             if op in OPS:
                 try:
                     self._send(200, OPS[op]({}))

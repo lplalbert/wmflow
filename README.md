@@ -106,7 +106,7 @@ python run.py workflows/smoke_ablation.json --out out/smoke
 python run.py workflows/smoke_ablation.json --set 5.layer=noise --set 6.preset=jpeg75
 python run.py workflows/smoke_ablation.json --validate-only
 
-# 5) 一键跑全部 5 套测试（与 CI 同一入口）
+# 5) 一键跑全部 7 套测试（与 CI 同一入口）
 bash scripts/test_all.sh
 
 # 6) 可选：WebUI 端到端点测（34 项，需 Playwright + chromium）
