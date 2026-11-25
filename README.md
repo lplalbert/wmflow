@@ -147,4 +147,5 @@ python webui.py --port 7860 --token <令牌>               # 或设 WMFLOW_WEBUI
 - [x] 自定义配方进训练：`custom:<名>` + 梯度自检 + ckpt 结构快照回放 + `logit>0` 口径（tests/test_train_custom.py 8 组）
 - [x] 工程化：MIT LICENSE / pyproject 元数据（可选 `torch` extra、CLI 入口、pytest）/ `scripts/test_all.sh` + CI / demo 封面生成脚本
 - [x] WebUI 端到端：34 项点测（5 框架 / 攻击层 / 转码 / 组件库 / 逐积木追踪 / 节点编辑 / 存配方 / 自定义直跑 / LLM 三模式 / 训练面板），`tests/e2e_webui.py`（可选，需 Playwright）
-- [x] 访问控制与工程：`--token` / `WMFLOW_WEBUI_TOKEN` 的 `/api/*` 鉴权、`WMFLOW_FS_ROOTS` 可配、CI 增加可选 e2e job
+- [x] 访问控制与工程：`--token` / `WMFLOW_WEBUI_TOKEN` 的 `/api/*` 鉴权、`WMFLOW_FS_ROOTS` 可配、CI e2e 合并门禁（带 token 鉴权路径）
+- [x] 工程收口补漏：ckpt 加载 `weights_only=True`（信任边界）、`webui_index.html` 移入包内（Wheel 安装后首页可用）

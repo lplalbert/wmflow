@@ -50,6 +50,9 @@ Repository = "https://gitcode.com/lplalbert/wmflow.git"
 packages = ["wmflow"]
 py-modules = ["run", "prompt_tool", "webui"]
 
+[tool.setuptools.package-data]
+wmflow = ["webui_index.html"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

@@ -80,7 +80,7 @@ def test_train_custom_recipe():
             cks = sorted(p for p in os.listdir(run_dir) if p.endswith(".pt"))
             assert cks, "没产出 ckpt"
             ck = torch.load(os.path.join(run_dir, cks[-1]),
-                            map_location="cpu", weights_only=False)
+                            map_location="cpu", weights_only=True)
             assert ck["size"] == 128, f"配方尺寸应覆盖表单 32, got {ck['size']}"
             assert ck["msg_len"] == 30
             assert ck["spec_enc"] and ck["spec_dec"], "ckpt 必须带结构快照"

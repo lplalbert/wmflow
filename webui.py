@@ -31,6 +31,16 @@ from wmflow import llm
 
 ROOT = Path(__file__).parent
 
+
+def read_index_html() -> bytes:
+    # 源码树与 Wheel 安装都是 webui.py 与 wmflow/ 平级, 首选包内文件;
+    # 兜底 importlib.resources 覆盖其他安装布局。
+    cand = ROOT / "wmflow" / "webui_index.html"
+    if cand.is_file():
+        return cand.read_bytes()
+    from importlib import resources
+    return resources.files("wmflow").joinpath("webui_index.html").read_bytes()
+
 # 访问令牌: 空 = 不鉴权 (默认, 适合本地/SSH 隧道); 非空时 /api/* 必须带
 # X-Wmflow-Token 头或 ?token= 查询参数。可用 --token 或 WMFLOW_WEBUI_TOKEN 设置。
 TOKEN = ""
@@ -264,7 +274,8 @@ def _resolve_demo_model(d):
         if not (real == runs_root or real.startswith(runs_root + os.sep)):
             raise ValueError("ckpt 须在 runs/ 目录下")
         try:
-            ck = torch.load(real, map_location="cpu", weights_only=False)
+            # ckpt 只含基本类型+张量: weights_only=True 防恶意 pickle 注入
+            ck = torch.load(real, map_location="cpu", weights_only=True)
         except Exception as e:
             raise ValueError(f"ckpt 读取失败: {e}")
 
@@ -695,7 +706,7 @@ class Handler(BaseHTTPRequestHandler):
         # (token 鉴权模式下文档/e2e 都用 `/?token=xxx` 打开页面)。
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
-            self._send(200, (ROOT / "webui_index.html").read_bytes(),
+            self._send(200, read_index_html(),
                        "text/html; charset=utf-8")
         elif path == "/favicon.ico":
             self._send(204, b"")

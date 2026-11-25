@@ -26,9 +26,11 @@ jobs:
         run: bash scripts/test_all.sh
 
   e2e:
-    # 依赖外部 Chromium 下载, 失败不阻塞主测试; 用于守护 WebUI 前端回归
+    # WebUI 前端回归门禁: 以 token 鉴权启动, 覆盖 ?token= 首页/401 等路径
+    # (曾因 continue-on-error 掩盖 token 首页 404 回归)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    env:
+      WMFLOW_E2E_TOKEN: wmflow-ci-e2e-token
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5

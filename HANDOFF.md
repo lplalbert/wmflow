@@ -41,9 +41,10 @@ wmflow/
                    # crop_resize/dropout/combo) + BCE/MSE 加权 + epoch BER + ckpt
   nodes_core.py / nodes_models.py / nodes_netspec.py   # 14 个图节点
   webui.py         # 零依赖 http.server 的 web 服务 (21 个 /api/*, 可选 token 鉴权)
-webui_index.html   # 单页前端: 节点图画布(SVG 贝塞尔连线/类型彩色端口/节点内嵌
-                   # 图像·比特格·热图·指标预览) 四视图: 流水线/积木链(组件库+组装台+
-                   # 我的配方)/训练 + 通用对话框(存配方/导出/导入)
+wmflow/webui_index.html  # 单页前端 (在包内, Wheel 安装也随包走): 节点图画布
+                   # (SVG 贝塞尔连线/类型彩色端口/节点内嵌图像·比特格·热图·指标
+                   # 预览) 四视图: 流水线/积木链(组件库+组装台+我的配方)/训练 +
+                   # 通用对话框(存配方/导出/导入)
 prompt_tool.py     # LLM prompt CLI (describe/debug/tune/apply/ask)
 scripts/webui.sh   # 服务管理 (pidfile /tmp/wmflow_webui.pid, 避 pkill 自匹配)
 scripts/make_demo_cover.py  # 生成 demo/cover.png (demo/ 不进仓, 让快速开始开箱即跑)
@@ -110,6 +111,13 @@ custom_recipes/    # 运行时资产: 自定义配方 JSON (gitignore, 不随仓
     `dataset_path`（此前只挡目录浏览，可绕过读任意目录）；`val_ratio` 限定 `[0,1)`；
     ⑤ `load_dataset` 跳过坏图后同步过滤 `files`，保证图与文件名一一对应。
     新增回归测试 `tests/test_webui_auth.py`、`tests/test_train_val.py`。
+14. **工程收口补漏（本轮）**：① ckpt 加载统一 `torch.load(..., weights_only=True)`
+    （webui 回放与测试同口径），ckpt 只含基本类型+张量，防恶意 pickle 注入
+    （信任边界收敛）；② `webui_index.html` 移入 `wmflow/` 包内并声明
+    package-data，`webui.py` 用包内路径 + `importlib.resources` 兜底解析，
+    Wheel 安装后首页不再丢资源；③ CI e2e 去掉 `continue-on-error` 改为合并
+    门禁，并设 `WMFLOW_E2E_TOKEN` 让 token 鉴权路径（`/?token=` 首页、401）
+    进 CI，token 首页 404 这类回归不再被掩盖。
 
 ## 4. 操作手册
 
@@ -226,6 +234,12 @@ python tests/test_smoke.py && python tests/test_netspec.py && python tests/test_
 30. **`FS_ROOTS` 要同时挡住「启动训练」**：只在校验目录浏览时用白名单不够，
     `op_train_start` 的 `dataset_path` 也要做同样的 realpath 前缀校验，否则可绕过白名单
     让服务器读任意目录。
+31. **ckpt 加载必须 `weights_only=True`**：runs/ 目录可被写时就要把 ckpt 当不可信
+    输入，`torch.load` 默认 pickle 反序列化可执行任意代码。ckpt 格式是「基本类型+
+    张量」，weights_only=True 够用（`test_train_custom` 即回归断言）。
+32. **`webui_index.html` 在 `wmflow/` 包内**：前端单文件已从仓库根移入包内
+    （pyproject package-data 声明），`webui.py` 统一经 `read_index_html()` 读取——
+    勿在仓库根重建同名文件或把路径硬编码回根目录，否则 Wheel 安装后首页 500。
 
 ## 6. 未完成 / 下一步（按优先级候选）
 
